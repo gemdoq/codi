@@ -1,6 +1,11 @@
 {
   "name": "Codi Dev",
   "image": "mcr.microsoft.com/devcontainers/typescript-node:22",
+  "features": {
+    "ghcr.io/devcontainers/features/sshd:1": {
+      "version": "latest"
+    }
+  },
   "postCreateCommand": "npm install && npm run build",
   "customizations": {
     "vscode": {
