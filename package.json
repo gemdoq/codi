@@ -1,5 +1,5 @@
 {
-  "name": "codi-ai",
+  "name": "@gemdoq/codi",
   "version": "0.1.0",
   "description": "AI coding agent for your terminal. Read, write, search, and execute — all through natural language.",
   "type": "module",
