@@ -1,0 +1,56 @@
+{
+  "name": "codi",
+  "version": "0.1.0",
+  "description": "Terminal-based AI coding agent",
+  "type": "module",
+  "bin": {
+    "codi": "./dist/cli.js"
+  },
+  "main": "./dist/cli.js",
+  "scripts": {
+    "dev": "tsx src/cli.ts",
+    "build": "tsup",
+    "test": "vitest",
+    "start": "node dist/cli.js"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "keywords": [
+    "ai",
+    "agent",
+    "coding",
+    "terminal",
+    "cli"
+  ],
+  "license": "MIT",
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.78.0",
+    "@clack/prompts": "^1.0.1",
+    "@modelcontextprotocol/sdk": "^1.27.1",
+    "chalk": "^4.1.2",
+    "cheerio": "^1.2.0",
+    "cli-highlight": "^2.1.11",
+    "diff": "^8.0.3",
+    "external-editor": "^3.1.0",
+    "globby": "^16.1.1",
+    "js-tiktoken": "^1.0.21",
+    "marked": "^15.0.12",
+    "marked-terminal": "^7.3.0",
+    "ollama": "^0.6.3",
+    "openai": "^6.25.0",
+    "ora": "^9.3.0",
+    "pdf-parse": "^2.4.5",
+    "yaml": "^2.8.2",
+    "zod": "^4.3.6"
+  },
+  "devDependencies": {
+    "@types/diff": "^7.0.2",
+    "@types/node": "^25.3.3",
+    "@types/pdf-parse": "^1.1.5",
+    "tsup": "^8.5.1",
+    "tsx": "^4.21.0",
+    "typescript": "^5.9.3",
+    "vitest": "^4.0.18"
+  }
+}
