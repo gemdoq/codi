@@ -374,6 +374,89 @@ EOF
 - **ripgrep** (`rg`) - 코드 검색 성능 향상 (선택, 없으면 grep 사용)
 - **Git** - Git 관련 기능 사용 시 필요
 
+## 배포 (메인테이너용)
+
+새 버전을 배포하는 방법입니다. 터미널에서 아래 두 줄만 실행하면 됩니다.
+
+### 버전 종류
+
+| 명령어 | 변화 | 언제 쓰나 |
+|--------|------|----------|
+| `npm version patch` | 0.1.1 → 0.1.**2** | 버그 수정 |
+| `npm version minor` | 0.1.1 → 0.**2**.0 | 새 기능 추가 |
+| `npm version major` | 0.1.1 → **1**.0.0 | 큰 변경 (호환 깨질 때) |
+
+### 전체 흐름 (예시)
+
+예를 들어 "슬래시 커맨드 `/version`을 추가"하는 작업을 했다면:
+
+```bash
+# ① 평소처럼 코드를 수정하고 커밋한다 (여기까지는 항상 하던 것과 동일)
+git add src/config/slash-commands.ts
+git commit -m "feat: add /version slash command"
+
+# 필요하면 커밋을 여러 번 해도 된다
+git add src/ui/renderer.ts
+git commit -m "fix: fix rendering bug"
+
+# ② 작업이 다 끝나면, 버전을 올린다
+npm version patch
+
+# ③ GitHub에 올린다 (이러면 자동으로 npm 배포 + Homebrew 업데이트됨)
+git push origin main --tags
+```
+
+`npm version patch`는 내부적으로 이 세 가지를 한번에 해주는 단축 명령어입니다:
+1. `package.json`의 `"version": "0.1.1"` → `"0.1.2"`로 수정
+2. 자동으로 `git commit`
+3. 자동으로 `git tag v0.1.2` (이 커밋에 버전 이름표 부착)
+
+그래서 흐름을 정리하면:
+
+```
+[평소 작업]                           [배포]
+
+코드 수정 → git commit               npm version patch → git push origin main --tags
+코드 수정 → git commit                     ↓
+코드 수정 → git commit               GitHub Actions 자동 실행
+    ↓                                      ↓
+여기까지는 평소랑 똑같음              npm 배포 + Homebrew 업데이트
+```
+
+### 배포 절차 (요약)
+
+```bash
+cd ~/codi
+npm version patch                  # 버전업 + 자동 커밋 + 자동 태그
+git push origin main --tags        # push하면 자동 배포
+```
+
+이게 끝입니다. GitHub Actions가 자동으로:
+1. 테스트 실행
+2. npm에 새 버전 배포
+3. Homebrew Formula 업데이트
+
+### 배포 확인
+
+```bash
+# npm에 올라갔는지 확인
+npm info @gemdoq/codi version
+
+# GitHub Actions 탭에서 워크플로우 성공 여부 확인
+# https://github.com/gemdoq/codi/actions
+```
+
+### 사전 준비 (최초 1회만)
+
+배포 자동화를 위해 GitHub Secrets에 두 개의 토큰이 등록되어 있어야 합니다:
+
+| Secret 이름 | 용도 | 발급 위치 |
+|-------------|------|----------|
+| `NPM_TOKEN` | npm 배포 인증 | https://www.npmjs.com/settings/gemdoq/tokens |
+| `HOMEBREW_GITHUB_TOKEN` | Homebrew Formula 자동 업데이트 | https://github.com/settings/tokens |
+
+등록 위치: https://github.com/gemdoq/codi/settings/secrets/actions
+
 ## 문제 해결
 
 ### "Could not resolve authentication method" 에러

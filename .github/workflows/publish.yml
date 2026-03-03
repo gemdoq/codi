@@ -1,0 +1,83 @@
+name: Publish
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
+          registry-url: 'https://registry.npmjs.org'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Type check
+        run: npx tsc --noEmit
+
+      - name: Run tests
+        run: npm test -- --run
+
+      - name: Build
+        run: npm run build
+
+      - name: Extract version from tag
+        id: version
+        run: echo "VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+
+      - name: Verify package.json version matches tag
+        run: |
+          PKG_VERSION=$(node -p "require('./package.json').version")
+          TAG_VERSION="${{ steps.version.outputs.VERSION }}"
+          if [ "$PKG_VERSION" != "$TAG_VERSION" ]; then
+            echo "Version mismatch: package.json=$PKG_VERSION, tag=$TAG_VERSION"
+            exit 1
+          fi
+          echo "Version verified: $TAG_VERSION"
+
+      - name: Publish to npm
+        run: npm publish --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      - name: Update Homebrew Formula
+        env:
+          HOMEBREW_GITHUB_TOKEN: ${{ secrets.HOMEBREW_GITHUB_TOKEN }}
+        run: |
+          VERSION="${{ steps.version.outputs.VERSION }}"
+          TARBALL_URL="https://registry.npmjs.org/@gemdoq/codi/-/codi-${VERSION}.tgz"
+
+          # Wait for npm registry to propagate
+          echo "Waiting for npm registry..."
+          sleep 10
+
+          # Download tarball and compute sha256
+          curl -sSL "$TARBALL_URL" -o codi.tgz
+          SHA256=$(shasum -a 256 codi.tgz | awk '{print $1}')
+          echo "SHA256: $SHA256"
+
+          # Clone homebrew tap
+          git clone "https://x-access-token:${HOMEBREW_GITHUB_TOKEN}@github.com/gemdoq/homebrew-codi.git" homebrew-tap
+          cd homebrew-tap
+
+          # Update Formula
+          sed -i "s|url \".*\"|url \"${TARBALL_URL}\"|" Formula/codi.rb
+          sed -i "s|sha256 \".*\"|sha256 \"${SHA256}\"|" Formula/codi.rb
+
+          # Commit and push
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add Formula/codi.rb
+          git commit -m "Update codi to v${VERSION}"
+          git push
