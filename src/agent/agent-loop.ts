@@ -93,17 +93,21 @@ export async function agentLoop(
     conversation.addAssistantMessage(response.content);
 
     // Collect text
+    const wasStreamed = (response as any)._streamed === true;
     if (response.text) {
       finalText = response.text;
     }
 
     // Check stop reason
     if (response.stopReason === 'end_turn' || !response.toolCalls || response.toolCalls.length === 0) {
-      // Done - render final text
-      if (showOutput && finalText) {
+      // Only render if not already streamed to terminal
+      if (showOutput && finalText && !wasStreamed) {
         console.log('');
         console.log(renderAssistantPrefix());
         console.log(renderMarkdown(finalText));
+        console.log('');
+      }
+      if (wasStreamed && showOutput) {
         console.log('');
       }
       break;
