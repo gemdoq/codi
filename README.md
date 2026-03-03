@@ -12,17 +12,35 @@
 # Node.js 20 이상 필요
 node --version  # v20.0.0+
 
-# 레포 클론 및 설치
+# npm으로 설치 (추천)
+npm install -g @gemdoq/codi
+
+# 또는 설치 없이 바로 실행
+npx @gemdoq/codi
+
+# 또는 Homebrew (macOS)
+brew tap gemdoq/codi
+brew install codi
+```
+
+<details>
+<summary>소스에서 직접 빌드하기</summary>
+
+```bash
 git clone https://github.com/gemdoq/codi.git
 cd codi
 npm install
 npm run build
-npm link  # 전역 명령어로 등록 (선택)
+npm link  # 전역 명령어로 등록
 ```
+
+</details>
 
 ### 2. API 키 설정
 
 Codi는 기본적으로 **Google Gemini 2.5 Flash** (무료)를 사용합니다.
+
+처음 실행하면 설정 마법사가 자동으로 안내합니다. 수동 설정도 가능합니다:
 
 **API 키 발급:**
 1. [Google AI Studio](https://aistudio.google.com/apikey) 접속
@@ -58,14 +76,7 @@ EOF
 ### 3. 실행
 
 ```bash
-# 대화형 세션 시작
 codi
-
-# 또는 빌드된 파일 직접 실행
-node dist/cli.js
-
-# 또는 개발 모드 (빌드 없이)
-npx tsx src/cli.ts
 ```
 
 ## 사용법
@@ -89,6 +100,15 @@ codi > package.json에 새 스크립트를 추가해줘
 ```bash
 codi -p "이 디렉토리의 파일 목록을 보여줘"
 codi -p "README.md를 한국어로 번역해줘"
+```
+
+### 종료
+
+```
+exit     # 또는 quit, q
+/quit    # 또는 /exit
+Ctrl+D   # 즉시 종료
+Ctrl+C   # 두 번 누르면 종료
 ```
 
 ### CLI 옵션
@@ -343,8 +363,8 @@ EOF
 
 | 단축키 | 기능 |
 |--------|------|
-| `Ctrl+C` | 현재 작업 취소 |
-| `Ctrl+D` | 종료 |
+| `Ctrl+C` | 현재 작업 취소 (두 번 누르면 종료) |
+| `Ctrl+D` | 즉시 종료 |
 | `Ctrl+L` | 화면 지우기 |
 | `Tab` | 자동 완성 (커맨드, 파일 경로) |
 
