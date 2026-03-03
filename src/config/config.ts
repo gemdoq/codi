@@ -46,11 +46,13 @@ export interface McpServerConfig {
 }
 
 const DEFAULT_CONFIG: CodiConfig = {
-  provider: 'anthropic',
-  model: 'claude-sonnet-4-20250514',
+  provider: 'openai',
+  model: 'gemini-2.5-flash',
   maxTokens: 8192,
   apiKeys: {},
-  baseUrls: {},
+  baseUrls: {
+    openai: 'https://generativelanguage.googleapis.com/v1beta/openai',
+  },
   permissions: {
     allow: ['read_file', 'glob', 'grep', 'list_dir', 'ask_user'],
     deny: [],
@@ -86,6 +88,9 @@ export class ConfigManager {
     this.loadFile(path.join(process.cwd(), '.codi', 'settings.local.json'));
 
     // Environment variables override
+    if (process.env['GEMINI_API_KEY']) {
+      this.config.apiKeys.openai = process.env['GEMINI_API_KEY'];
+    }
     if (process.env['ANTHROPIC_API_KEY']) {
       this.config.apiKeys.anthropic = process.env['ANTHROPIC_API_KEY'];
     }

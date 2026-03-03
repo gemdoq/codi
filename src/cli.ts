@@ -126,8 +126,8 @@ ${chalk.bold('Usage:')}
   codi [options] [prompt]
 
 ${chalk.bold('Options:')}
-  -m, --model <model>    Set the model (e.g., gpt-4o, claude-sonnet-4-20250514)
-  --provider <name>      Set the provider (anthropic, openai, ollama)
+  -m, --model <model>    Set the model (default: gemini-2.5-flash)
+  --provider <name>      Set the provider (openai, anthropic, ollama)
   -p <prompt>            Run a single prompt and exit
   -c, --continue         Continue the last session
   -r, --resume <id>      Resume a specific session
@@ -136,11 +136,17 @@ ${chalk.bold('Options:')}
   -h, --help             Show this help
   -v, --version          Show version
 
+${chalk.bold('Environment:')}
+  GEMINI_API_KEY         Google Gemini API key (default provider)
+  OPENAI_API_KEY         OpenAI API key
+  ANTHROPIC_API_KEY      Anthropic API key
+
 ${chalk.bold('Examples:')}
-  codi                        # Start interactive session
-  codi -p "explain main.ts"   # Single prompt
-  codi --model gpt-4o         # Use GPT-4o
-  codi -c                     # Continue last session
+  codi                                   # Start interactive session
+  codi -p "explain main.ts"              # Single prompt
+  codi --provider anthropic              # Use Anthropic Claude
+  codi --model gpt-4o --provider openai  # Use OpenAI GPT-4o
+  codi -c                                # Continue last session
 `);
 }
 
@@ -167,12 +173,12 @@ async function main(): Promise<void> {
   // Create LLM provider
   let provider: LlmProvider;
   switch (providerName) {
-    case 'openai':
-      provider = new OpenAIProvider({
-        apiKey: config.apiKeys.openai,
+    case 'anthropic':
+      provider = new AnthropicProvider({
+        apiKey: config.apiKeys.anthropic,
         model: modelName,
         maxTokens: config.maxTokens,
-        baseUrl: config.baseUrls.openai,
+        baseUrl: config.baseUrls.anthropic,
       });
       break;
     case 'ollama':
@@ -182,13 +188,13 @@ async function main(): Promise<void> {
         baseUrl: config.baseUrls.ollama,
       });
       break;
-    case 'anthropic':
+    case 'openai':
     default:
-      provider = new AnthropicProvider({
-        apiKey: config.apiKeys.anthropic,
+      provider = new OpenAIProvider({
+        apiKey: config.apiKeys.openai || process.env['GEMINI_API_KEY'],
         model: modelName,
         maxTokens: config.maxTokens,
-        baseUrl: config.baseUrls.anthropic,
+        baseUrl: config.baseUrls.openai,
       });
       break;
   }
