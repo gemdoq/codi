@@ -313,6 +313,13 @@ async function main(): Promise<void> {
     conversation,
     provider,
     compressor,
+    exitFn: async () => {
+      stopSpinner();
+      console.log(chalk.dim('\nSaving session...'));
+      sessionManager.save(conversation, undefined, provider.model);
+      await hookManager.runHooks('SessionEnd', {});
+      await mcpManager.disconnectAll();
+    },
     setProvider: (name: string, model: string) => {
       const newProvider = name || providerName;
       switch (newProvider) {
@@ -369,21 +376,21 @@ async function main(): Promise<void> {
 
     onInterrupt: () => {
       stopSpinner();
-      console.log(chalk.dim('\n(interrupted)'));
+    },
+
+    onExit: async () => {
+      stopSpinner();
+      console.log(chalk.dim('\nSaving session...'));
+      sessionManager.save(conversation, undefined, provider.model);
+      await hookManager.runHooks('SessionEnd', {});
+      await mcpManager.disconnectAll();
     },
   });
 
-  // Graceful shutdown
-  process.on('SIGINT', async () => {
-    stopSpinner();
-    console.log(chalk.dim('\n\nSaving session...'));
-    sessionManager.save(conversation, undefined, provider.model);
-    await hookManager.runHooks('SessionEnd', {});
-    await mcpManager.disconnectAll();
-    process.exit(0);
-  });
-
+  // SIGTERM (Docker, etc.)
   process.on('SIGTERM', async () => {
+    stopSpinner();
+    sessionManager.save(conversation, undefined, provider.model);
     await hookManager.runHooks('SessionEnd', {});
     await mcpManager.disconnectAll();
     process.exit(0);

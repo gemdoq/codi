@@ -183,14 +183,12 @@ async function callLlmWithRetry(
           : undefined,
       });
 
-      // If we streamed text, add newline
-      if (streamedText && showOutput) {
-        process.stdout.write('\n');
-      }
-
-      // If streamed, we already showed the text, so mark it
-      if (streamedText && response.text) {
-        // Text was already displayed during streaming
+      // If we streamed text, add newline and mark as already displayed
+      if (streamedText) {
+        if (showOutput) {
+          process.stdout.write('\n');
+        }
+        // Text was already displayed during streaming — do not render again
         return { ...response, _streamed: true } as any;
       }
 

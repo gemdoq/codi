@@ -12,6 +12,7 @@ export interface ReplOptions {
   onMessage: (message: string) => Promise<void>;
   onSlashCommand: (command: string, args: string) => Promise<boolean>;
   onInterrupt: () => void;
+  onExit?: () => Promise<void>;
 }
 
 export class Repl {
@@ -22,6 +23,7 @@ export class Repl {
   private inMultiline = false;
   private pasteMode = false;
   private options: ReplOptions;
+  private lastInterruptTime = 0;
 
   constructor(options: ReplOptions) {
     this.options = options;
@@ -68,12 +70,35 @@ export class Repl {
         this.rl.prompt();
 
         const line = await new Promise<string>((resolve, reject) => {
-          this.rl!.once('line', resolve);
-          this.rl!.once('close', () => reject(new Error('closed')));
-          this.rl!.once('SIGINT', () => {
+          const onLine = (data: string) => {
+            cleanup();
+            resolve(data);
+          };
+          const onClose = () => {
+            cleanup();
+            reject(new Error('closed'));
+          };
+          const onSigint = () => {
+            cleanup();
+            const now = Date.now();
+            // Double Ctrl+C within 2 seconds → exit
+            if (now - this.lastInterruptTime < 2000) {
+              this.gracefulExit().catch(() => process.exit(1));
+              return;
+            }
+            this.lastInterruptTime = now;
             this.options.onInterrupt();
+            console.log(chalk.dim('\n(Press Ctrl+C again to exit)'));
             resolve('');
-          });
+          };
+          const cleanup = () => {
+            this.rl!.removeListener('line', onLine);
+            this.rl!.removeListener('close', onClose);
+            this.rl!.removeListener('SIGINT', onSigint);
+          };
+          this.rl!.on('line', onLine);
+          this.rl!.on('close', onClose);
+          this.rl!.on('SIGINT', onSigint);
         });
 
         const trimmed = line.trim();
@@ -100,8 +125,9 @@ export class Repl {
         await this.processInput(fullInput);
       } catch (err) {
         if (err instanceof Error && err.message === 'closed') {
-          this.running = false;
-          break;
+          // Ctrl+D or readline closed
+          await this.gracefulExit();
+          return;
         }
       }
     }
@@ -112,6 +138,13 @@ export class Repl {
   }
 
   private async processInput(input: string): Promise<void> {
+    // Direct exit commands (without slash)
+    const lower = input.toLowerCase();
+    if (lower === 'exit' || lower === 'quit' || lower === 'q') {
+      await this.gracefulExit();
+      return;
+    }
+
     // Slash commands
     if (input.startsWith('/')) {
       const spaceIdx = input.indexOf(' ');
@@ -176,6 +209,15 @@ export class Repl {
       this.rl.close();
       this.rl = null;
     }
+  }
+
+  async gracefulExit(): Promise<void> {
+    this.stop();
+    if (this.options.onExit) {
+      await this.options.onExit();
+    }
+    console.log(chalk.dim('\nGoodbye!\n'));
+    process.exit(0);
   }
 
   private printWelcome(): void {

@@ -19,6 +19,7 @@ export interface SlashCommandContext {
   compressor: ContextCompressor;
   setProvider: (name: string, model: string) => void;
   reloadSystemPrompt: () => void;
+  exitFn?: () => Promise<void>;
 }
 
 export interface SlashCommand {
@@ -51,7 +52,10 @@ export function createBuiltinCommands(): SlashCommand[] {
       name: '/quit',
       aliases: ['/exit'],
       description: 'Exit Codi',
-      handler: async () => {
+      handler: async (_args, ctx) => {
+        if (ctx.exitFn) {
+          await ctx.exitFn();
+        }
         console.log(chalk.dim('\nGoodbye!\n'));
         process.exit(0);
       },
