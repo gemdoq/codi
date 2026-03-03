@@ -1,5 +1,34 @@
+# Dependencies
 node_modules/
+
+# Build output
 dist/
 *.tsbuildinfo
+
+# OS files
 .DS_Store
+Thumbs.db
+
+# Codi local settings (may contain API keys)
 .codi/settings.local.json
+
+# Environment variables (may contain API keys)
+.env
+.env.local
+.env.*.local
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Debug logs
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Sessions and memory (user-specific data)
+.codi/sessions/
+.codi/memory/

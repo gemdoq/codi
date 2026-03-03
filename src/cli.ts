@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
 import chalk from 'chalk';
+import { needsSetup, runSetupWizard } from './setup-wizard.js';
 import { configManager } from './config/config.js';
 import { Repl } from './repl.js';
 import { agentLoop } from './agent/agent-loop.js';
@@ -163,6 +164,15 @@ async function main(): Promise<void> {
   if (args.version) {
     console.log('codi v0.1.0');
     process.exit(0);
+  }
+
+  // First-time setup wizard
+  if (await needsSetup()) {
+    const result = await runSetupWizard();
+    if (result) {
+      // Reload config after setup
+      configManager.reload();
+    }
   }
 
   // Load config

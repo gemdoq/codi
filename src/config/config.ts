@@ -154,6 +154,12 @@ export class ConfigManager {
     return this.config;
   }
 
+  reload(): void {
+    this.config = { ...DEFAULT_CONFIG };
+    this.configPaths = [];
+    this.loadAll();
+  }
+
   set(key: string, value: unknown): void {
     (this.config as any)[key] = value;
   }

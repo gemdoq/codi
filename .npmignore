@@ -1,0 +1,11 @@
+src/
+tests/
+.github/
+.devcontainer/
+.codi/
+homebrew/
+tsconfig.json
+tsup.config.ts
+*.tsbuildinfo
+.DS_Store
+.gitignore
