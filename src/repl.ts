@@ -78,7 +78,7 @@ export class Repl {
       process.stdin.on('keypress', (_str: string, key: { name?: string; ctrl?: boolean; sequence?: string }) => {
         if (key && key.sequence === '\x16') {
           try {
-            const clip = execSync('powershell -command Get-Clipboard', {
+            const clip = execSync('powershell -command "[Console]::OutputEncoding = [System.Text.Encoding]::UTF8; Get-Clipboard"', {
               encoding: 'utf-8',
               timeout: 3000,
             }).replace(/\r\n$/, '');
