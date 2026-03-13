@@ -13,6 +13,7 @@ export class OpenAIProvider implements LlmProvider {
   model: string;
   private client: OpenAI;
   private maxTokens: number;
+  private isGemini: boolean;
 
   constructor(config: { apiKey?: string; model?: string; maxTokens?: number; baseUrl?: string }) {
     this.client = new OpenAI({
@@ -21,6 +22,7 @@ export class OpenAIProvider implements LlmProvider {
     });
     this.model = config.model || 'gpt-4o';
     this.maxTokens = config.maxTokens || 8192;
+    this.isGemini = !!(config.baseUrl && config.baseUrl.includes('generativelanguage.googleapis.com'));
   }
 
   setModel(model: string): void {
@@ -46,23 +48,31 @@ export class OpenAIProvider implements LlmProvider {
       function: {
         name: t.name,
         description: t.description,
-        parameters: t.input_schema,
+        parameters: this.cleanSchema(t.input_schema),
       },
     }));
 
-    if (options.stream && options.callbacks) {
-      return this.streamChat(messages, tools, options);
+    try {
+      if (options.stream && options.callbacks) {
+        return await this.streamChat(messages, tools, options);
+      }
+
+      const response = await this.client.chat.completions.create({
+        model: this.model,
+        messages,
+        max_tokens: options.maxTokens || this.maxTokens,
+        ...(options.temperature !== undefined ? { temperature: options.temperature } : {}),
+        ...(tools && tools.length > 0 ? { tools } : {}),
+      });
+
+      return this.parseResponse(response);
+    } catch (err: any) {
+      // Extract detailed error info for better debugging
+      const status = err.status || err.statusCode || '';
+      const body = err.error || err.body || err.response?.body || '';
+      const detail = body ? JSON.stringify(body) : err.message || String(err);
+      throw new Error(`${status} ${detail}`.trim());
     }
-
-    const response = await this.client.chat.completions.create({
-      model: this.model,
-      messages,
-      max_tokens: options.maxTokens || this.maxTokens,
-      ...(options.temperature !== undefined ? { temperature: options.temperature } : {}),
-      ...(tools && tools.length > 0 ? { tools } : {}),
-    });
-
-    return this.parseResponse(response);
   }
 
   private async streamChat(
@@ -70,14 +80,22 @@ export class OpenAIProvider implements LlmProvider {
     tools: OpenAI.ChatCompletionTool[] | undefined,
     options: LlmRequestOptions
   ): Promise<LlmResponse> {
-    const stream = await this.client.chat.completions.create({
-      model: this.model,
-      messages,
-      max_tokens: options.maxTokens || this.maxTokens,
-      ...(options.temperature !== undefined ? { temperature: options.temperature } : {}),
-      ...(tools && tools.length > 0 ? { tools } : {}),
-      stream: true,
-    });
+    let stream;
+    try {
+      stream = await this.client.chat.completions.create({
+        model: this.model,
+        messages,
+        max_tokens: options.maxTokens || this.maxTokens,
+        ...(options.temperature !== undefined ? { temperature: options.temperature } : {}),
+        ...(tools && tools.length > 0 ? { tools } : {}),
+        stream: true,
+      });
+    } catch (err: any) {
+      const status = err.status || err.statusCode || '';
+      const body = err.error || err.body || err.response?.body || '';
+      const detail = body ? JSON.stringify(body) : err.message || String(err);
+      throw new Error(`${status} ${detail}`.trim());
+    }
 
     const content: ContentBlock[] = [];
     const toolCalls: ToolCall[] = [];
@@ -127,6 +145,38 @@ export class OpenAIProvider implements LlmProvider {
       toolCalls: toolCalls.length > 0 ? toolCalls : undefined,
       stopReason: toolCalls.length > 0 ? 'tool_use' : 'end_turn',
     };
+  }
+
+  /**
+   * Clean JSON Schema for Gemini compatibility.
+   * Gemini's OpenAI-compatible API rejects some valid JSON Schema features:
+   * - Empty `required` arrays
+   * - `default` values in properties
+   * - `additionalProperties` at top level
+   */
+  private cleanSchema(schema: Record<string, unknown>): Record<string, unknown> {
+    const cleaned = { ...schema };
+
+    // Remove empty required arrays
+    if (Array.isArray(cleaned['required']) && (cleaned['required'] as unknown[]).length === 0) {
+      delete cleaned['required'];
+    }
+
+    // Clean properties recursively
+    if (cleaned['properties'] && typeof cleaned['properties'] === 'object') {
+      const props = { ...cleaned['properties'] as Record<string, unknown> };
+      for (const [key, val] of Object.entries(props)) {
+        if (val && typeof val === 'object') {
+          const prop = { ...val as Record<string, unknown> };
+          // Remove default values (Gemini doesn't support them in tool schemas)
+          delete prop['default'];
+          props[key] = prop;
+        }
+      }
+      cleaned['properties'] = props;
+    }
+
+    return cleaned;
   }
 
   private convertMessages(
