@@ -73,6 +73,23 @@ export class Repl {
       process.stdout.write('\x1B[?2004h'); // Enable bracket paste
     }
 
+    // Windows: intercept Ctrl+V (raw 0x16) and read from clipboard
+    if (os.platform() === 'win32' && process.stdin.isTTY) {
+      process.stdin.on('keypress', (_str: string, key: { name?: string; ctrl?: boolean; sequence?: string }) => {
+        if (key && key.sequence === '\x16') {
+          try {
+            const clip = execSync('powershell -command Get-Clipboard', {
+              encoding: 'utf-8',
+              timeout: 3000,
+            }).replace(/\r\n$/, '');
+            if (clip && this.rl) {
+              this.rl.write(clip);
+            }
+          } catch {}
+        }
+      });
+    }
+
     this.printWelcome();
 
     while (this.running) {
