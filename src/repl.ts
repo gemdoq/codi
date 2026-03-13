@@ -8,6 +8,21 @@ import { KeyBindingManager } from './ui/keybindings.js';
 import { renderPrompt, renderMarkdown, renderError, renderInfo } from './ui/renderer.js';
 import { statusLine } from './ui/status-line.js';
 import { completer } from './ui/completer.js';
+import { readFileSync } from 'fs';
+import { fileURLToPath } from 'url';
+import * as path from 'path';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
+function getVersion(): string {
+  try {
+    const pkg = JSON.parse(readFileSync(path.join(__dirname, '..', 'package.json'), 'utf-8'));
+    return `v${pkg.version}`;
+  } catch {
+    return 'v0.1.4';
+  }
+}
 
 export interface ReplOptions {
   onMessage: (message: string) => Promise<void>;
@@ -53,8 +68,8 @@ export class Repl {
       terminal: true,
     });
 
-    // Setup bracket paste mode detection
-    if (process.stdin.isTTY) {
+    // Setup bracket paste mode detection (skip on Windows — breaks Ctrl+V paste)
+    if (process.stdin.isTTY && os.platform() !== 'win32') {
       process.stdout.write('\x1B[?2004h'); // Enable bracket paste
     }
 
@@ -133,7 +148,7 @@ export class Repl {
       }
     }
 
-    if (process.stdin.isTTY) {
+    if (process.stdin.isTTY && os.platform() !== 'win32') {
       process.stdout.write('\x1B[?2004l'); // Disable bracket paste
     }
   }
@@ -178,16 +193,28 @@ export class Repl {
       return;
     }
 
-    // @ prefix → file reference (prepend file content)
+    // @ prefix → file reference (prepend file content or image)
     let message = input;
-    const atMatches = input.match(/@([\w./-]+)/g);
+    const IMAGE_EXTS = new Set(['.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp', '.svg']);
+    const atMatches = input.match(/@([\w.\/\\:~-]+)/g);
     if (atMatches) {
       for (const match of atMatches) {
         const filePath = match.slice(1);
         try {
-          const { readFileSync } = await import('fs');
-          const content = readFileSync(filePath, 'utf-8');
-          message = message.replace(match, `\n[File: ${filePath}]\n\`\`\`\n${content}\n\`\`\`\n`);
+          const ext = path.extname(filePath).toLowerCase();
+          if (IMAGE_EXTS.has(ext)) {
+            const data = readFileSync(filePath);
+            const base64 = data.toString('base64');
+            const mimeMap: Record<string, string> = {
+              '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg',
+              '.gif': 'image/gif', '.webp': 'image/webp', '.bmp': 'image/bmp', '.svg': 'image/svg+xml',
+            };
+            const mime = mimeMap[ext] || 'image/png';
+            message = message.replace(match, `\n[Image: ${filePath}](data:${mime};base64,${base64})\n`);
+          } else {
+            const content = readFileSync(filePath, 'utf-8');
+            message = message.replace(match, `\n[File: ${filePath}]\n\`\`\`\n${content}\n\`\`\`\n`);
+          }
         } catch {
           // Leave as-is if file doesn't exist
         }
@@ -226,7 +253,8 @@ export class Repl {
   private printWelcome(): void {
     console.log('');
     console.log(chalk.cyan.bold('  ╭─────────────────────────────╮'));
-    console.log(chalk.cyan.bold('  │') + chalk.white.bold('    Codi (코디) v0.1.0       ') + chalk.cyan.bold('│'));
+    const versionPad = `    Codi (코디) ${getVersion()}`.padEnd(29);
+    console.log(chalk.cyan.bold('  │') + chalk.white.bold(versionPad) + chalk.cyan.bold('│'));
     console.log(chalk.cyan.bold('  │') + chalk.dim('   AI Code Agent for Terminal ') + chalk.cyan.bold('│'));
     console.log(chalk.cyan.bold('  ╰─────────────────────────────╯'));
     console.log('');
