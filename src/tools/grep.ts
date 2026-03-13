@@ -203,6 +203,8 @@ async function builtinSearch(
       continue;
     }
 
+    // Normalize CRLF → LF for consistent matching across platforms
+    content = content.replace(/\r\n/g, '\n');
     const lines = content.split('\n');
     const matchedLineIndices: Set<number> = new Set();
     let fileMatchCount = 0;

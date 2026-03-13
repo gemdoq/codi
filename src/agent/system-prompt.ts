@@ -186,7 +186,7 @@ function buildEnvironmentInfo(context: PromptContext): string {
     '# Environment',
     `- Date: ${new Date().toISOString().split('T')[0]}`,
     `- OS: ${os.platform()} ${os.release()}`,
-    `- Shell: ${process.env['SHELL'] || process.env['COMSPEC'] || 'unknown'}`,
+    `- Shell: ${os.platform() === 'win32' ? 'PowerShell' : (process.env['SHELL'] || '/bin/bash')}`,
     `- Working Directory: ${context.cwd}`,
     `- Model: ${context.model}`,
     `- Provider: ${context.provider}`,

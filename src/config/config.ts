@@ -1,4 +1,5 @@
 import * as fs from 'fs';
+import * as os from 'os';
 import * as path from 'path';
 import type { ProviderName } from '../llm/provider.js';
 
@@ -76,7 +77,7 @@ export class ConfigManager {
   }
 
   private loadAll(): void {
-    const home = process.env['HOME'] || process.env['USERPROFILE'] || '~';
+    const home = process.env['HOME'] || process.env['USERPROFILE'] || os.homedir();
 
     // User global config
     this.loadFile(path.join(home, '.codi', 'settings.json'));
@@ -169,7 +170,7 @@ export class ConfigManager {
   }
 
   save(scope: 'user' | 'project' | 'local'): void {
-    const home = process.env['HOME'] || process.env['USERPROFILE'] || '~';
+    const home = process.env['HOME'] || process.env['USERPROFILE'] || os.homedir();
     let filePath: string;
 
     switch (scope) {

@@ -1,4 +1,5 @@
 import * as fs from 'fs';
+import * as os from 'os';
 import * as path from 'path';
 import * as crypto from 'crypto';
 import type { Message } from '../llm/types.js';
@@ -18,7 +19,7 @@ export class SessionManager {
   private sessionsDir: string;
 
   constructor() {
-    const home = process.env['HOME'] || process.env['USERPROFILE'] || '~';
+    const home = process.env['HOME'] || process.env['USERPROFILE'] || os.homedir();
     this.sessionsDir = path.join(home, '.codi', 'sessions');
   }
 

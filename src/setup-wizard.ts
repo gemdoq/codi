@@ -8,7 +8,7 @@ import { stdin as input, stdout as output } from 'process';
 const isWindows = os.platform() === 'win32';
 
 const SETTINGS_DIR = path.join(
-  process.env['HOME'] || process.env['USERPROFILE'] || '~',
+  process.env['HOME'] || process.env['USERPROFILE'] || os.homedir(),
   '.codi'
 );
 const SETTINGS_PATH = path.join(SETTINGS_DIR, 'settings.json');

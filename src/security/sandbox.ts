@@ -58,7 +58,7 @@ export function wrapCommand(command: string, config: SandboxConfig): string {
 
 function wrapWithSeatbelt(command: string, config: SandboxConfig): string {
   const cwd = process.cwd();
-  const home = process.env['HOME'] || process.env['USERPROFILE'] || '~';
+  const home = process.env['HOME'] || process.env['USERPROFILE'] || os.homedir();
 
   // Build sandbox profile
   const profile = [
@@ -101,7 +101,7 @@ function wrapWithSeatbelt(command: string, config: SandboxConfig): string {
 
 function wrapWithBubblewrap(command: string, config: SandboxConfig): string {
   const cwd = process.cwd();
-  const home = process.env['HOME'] || process.env['USERPROFILE'] || '~';
+  const home = process.env['HOME'] || process.env['USERPROFILE'] || os.homedir();
 
   const args = [
     'bwrap',

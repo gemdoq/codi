@@ -24,7 +24,7 @@ let taskCounter = 0;
 
 export const bashTool: Tool = {
   name: 'bash',
-  description: `Execute a shell command. Supports timeout (max 600s, default 120s) and background execution. The working directory persists between calls. Uses the platform default shell (bash on Unix, cmd.exe on Windows).`,
+  description: `Execute a shell command. Supports timeout (max 600s, default 120s) and background execution. The working directory persists between calls. Uses the platform default shell (bash on Unix, PowerShell on Windows).`,
   inputSchema: {
     type: 'object',
     properties: {
@@ -52,7 +52,12 @@ export const bashTool: Tool = {
     }
 
     return new Promise((resolve) => {
-      exec(command, {
+      // On Windows, prefix command with UTF-8 encoding to prevent Korean text corruption
+      const finalCommand = os.platform() === 'win32'
+        ? `[Console]::OutputEncoding = [System.Text.Encoding]::UTF8; ${command}`
+        : command;
+
+      exec(finalCommand, {
         timeout,
         maxBuffer: 10 * 1024 * 1024,
         shell: getDefaultShell(),
@@ -88,8 +93,11 @@ export const bashTool: Tool = {
 
 function runBackgroundTask(command: string): ToolResult {
   const taskId = `bg_${++taskCounter}`;
+  const bgCommand = os.platform() === 'win32'
+    ? `[Console]::OutputEncoding = [System.Text.Encoding]::UTF8; ${command}`
+    : command;
 
-  const proc = spawn(command, {
+  const proc = spawn(bgCommand, {
     shell: getDefaultShell(),
     cwd: process.cwd(),
     env: { ...process.env },

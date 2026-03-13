@@ -73,17 +73,25 @@ export class Repl {
       process.stdout.write('\x1B[?2004h'); // Enable bracket paste
     }
 
-    // Windows: intercept Ctrl+V (raw 0x16) and read from clipboard
+    // Windows: intercept Ctrl+V (raw 0x16) and read from clipboard via PowerShell
     if (os.platform() === 'win32' && process.stdin.isTTY) {
       process.stdin.on('keypress', (_str: string, key: { name?: string; ctrl?: boolean; sequence?: string }) => {
         if (key && key.sequence === '\x16') {
           try {
-            const clip = execSync('powershell -command "[Console]::OutputEncoding = [System.Text.Encoding]::UTF8; Get-Clipboard"', {
-              encoding: 'utf-8',
-              timeout: 3000,
-            }).replace(/\r\n$/, '');
+            const clip = execSync(
+              'powershell -NoProfile -command "[Console]::OutputEncoding = [System.Text.Encoding]::UTF8; Get-Clipboard"',
+              { encoding: 'utf-8', timeout: 5000, env: { ...process.env } }
+            ).replace(/\r\n/g, '\n').replace(/\n$/, '');
             if (clip && this.rl) {
-              this.rl.write(clip);
+              // For multiline paste, only take the first line into readline
+              // and append the rest as continuation
+              const firstNewline = clip.indexOf('\n');
+              if (firstNewline === -1) {
+                this.rl.write(clip);
+              } else {
+                // Write first line, then user can press Enter
+                this.rl.write(clip.replace(/\n/g, '\\'));
+              }
             }
           } catch {}
         }
@@ -189,13 +197,15 @@ export class Repl {
       return;
     }
 
-    // Bang prefix → direct bash execution
+    // Bang prefix → direct shell execution
     if (input.startsWith('!')) {
       const cmd = input.slice(1).trim();
       if (!cmd) return;
       try {
-        const shell = os.platform() === 'win32' ? 'powershell.exe' : undefined;
-        const result = execSync(cmd, {
+        const isWin = os.platform() === 'win32';
+        const shell = isWin ? 'powershell.exe' : undefined;
+        const finalCmd = isWin ? `[Console]::OutputEncoding = [System.Text.Encoding]::UTF8; ${cmd}` : cmd;
+        const result = execSync(finalCmd, {
           encoding: 'utf-8',
           stdio: ['inherit', 'pipe', 'pipe'],
           timeout: 30_000,

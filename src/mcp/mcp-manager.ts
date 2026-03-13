@@ -1,4 +1,5 @@
 import * as fs from 'fs';
+import * as os from 'os';
 import * as path from 'path';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
@@ -36,7 +37,7 @@ export class McpManager {
 
   private loadMcpConfigs(): Record<string, { command: string; args?: string[]; env?: Record<string, string> }> {
     const configs: Record<string, any> = {};
-    const home = process.env['HOME'] || process.env['USERPROFILE'] || '~';
+    const home = process.env['HOME'] || process.env['USERPROFILE'] || os.homedir();
 
     const paths = [
       path.join(home, '.codi', 'mcp.json'),

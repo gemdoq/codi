@@ -432,7 +432,7 @@ export function createBuiltinCommands(): SlashCommand[] {
           console.log(chalk.yellow('Usage: /search <keyword>'));
           return true;
         }
-        const home = process.env['HOME'] || process.env['USERPROFILE'] || '~';
+        const home = process.env['HOME'] || process.env['USERPROFILE'] || os.homedir();
         const sessionsDir = path.join(home, '.codi', 'sessions');
         if (!fs.existsSync(sessionsDir)) {
           console.log(chalk.dim('\nNo sessions found.\n'));
@@ -482,8 +482,10 @@ export function createBuiltinCommands(): SlashCommand[] {
         }
         const { execSync } = await import('child_process');
         try {
-          const shell = os.platform() === 'win32' ? 'powershell.exe' : undefined;
-          const output = execSync(args, { encoding: 'utf-8', cwd: process.cwd(), stdio: 'pipe', shell });
+          const isWin = os.platform() === 'win32';
+          const shell = isWin ? 'powershell.exe' : undefined;
+          const fixCmd = isWin ? `[Console]::OutputEncoding = [System.Text.Encoding]::UTF8; ${args}` : args;
+          const output = execSync(fixCmd, { encoding: 'utf-8', cwd: process.cwd(), stdio: 'pipe', shell });
           console.log(chalk.green(`\n✓ Command succeeded. No errors to fix.\n`));
           if (output.trim()) console.log(chalk.dim(output));
           return true;
@@ -526,7 +528,7 @@ export function createBuiltinCommands(): SlashCommand[] {
 // Custom slash commands from .codi/commands/
 export function loadCustomCommands(): SlashCommand[] {
   const commands: SlashCommand[] = [];
-  const home = process.env['HOME'] || process.env['USERPROFILE'] || '~';
+  const home = process.env['HOME'] || process.env['USERPROFILE'] || os.homedir();
 
   const dirs = [
     path.join(home, '.codi', 'commands'),

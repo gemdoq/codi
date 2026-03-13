@@ -1,4 +1,5 @@
 import * as fs from 'fs';
+import * as os from 'os';
 import * as path from 'path';
 import * as crypto from 'crypto';
 
@@ -6,7 +7,7 @@ export class MemoryManager {
   private memoryDir: string;
 
   constructor() {
-    const home = process.env['HOME'] || process.env['USERPROFILE'] || '~';
+    const home = process.env['HOME'] || process.env['USERPROFILE'] || os.homedir();
     const projectHash = crypto.createHash('md5').update(process.cwd()).digest('hex').slice(0, 8);
     const projectName = path.basename(process.cwd());
     this.memoryDir = path.join(home, '.codi', 'projects', `${projectName}-${projectHash}`, 'memory');

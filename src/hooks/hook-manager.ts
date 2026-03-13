@@ -69,7 +69,9 @@ export class HookManager {
         cwd: context['cwd'] || process.cwd(),
       });
 
-      const proc = exec(command, {
+      const isWin = os.platform() === 'win32';
+      const finalCommand = isWin ? `[Console]::OutputEncoding = [System.Text.Encoding]::UTF8; ${command}` : command;
+      const proc = exec(finalCommand, {
         timeout: timeout || 5000,
         cwd: process.cwd(),
         env: { ...process.env },

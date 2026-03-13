@@ -1,4 +1,5 @@
 import * as fs from 'fs';
+import * as os from 'os';
 import * as path from 'path';
 
 const allowedDirs: Set<string> = new Set();
@@ -18,7 +19,7 @@ export function validatePath(filePath: string): { valid: boolean; resolved: stri
   );
 
   // Allow home directory config paths
-  const home = process.env['HOME'] || process.env['USERPROFILE'] || '';
+  const home = process.env['HOME'] || process.env['USERPROFILE'] || os.homedir();
   const isInCodiConfig = home && resolved.startsWith(path.join(home, '.codi'));
 
   if (!isInCwd && !isInAllowed && !isInCodiConfig) {

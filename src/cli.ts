@@ -162,7 +162,16 @@ async function main(): Promise<void> {
   }
 
   if (args.version) {
-    console.log('codi v0.1.0');
+    try {
+      const { readFileSync } = await import('fs');
+      const { fileURLToPath } = await import('url');
+      const p = await import('path');
+      const dir = p.dirname(fileURLToPath(import.meta.url));
+      const pkg = JSON.parse(readFileSync(p.join(dir, '..', 'package.json'), 'utf-8'));
+      console.log(`codi v${pkg.version}`);
+    } catch {
+      console.log('codi v0.1.8');
+    }
     process.exit(0);
   }
 
