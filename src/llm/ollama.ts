@@ -137,7 +137,14 @@ export class OllamaProvider implements LlmProvider {
         } else if (block.type === 'image') {
           images.push(block.source.data);
         } else if (block.type === 'tool_result') {
-          textParts.push(`[Tool Result: ${typeof block.content === 'string' ? block.content : JSON.stringify(block.content)}]`);
+          if (Array.isArray(block.content)) {
+            for (const cb of block.content) {
+              if (cb.type === 'text') textParts.push(cb.text);
+              else if (cb.type === 'image') images.push(cb.source.data);
+            }
+          } else {
+            textParts.push(`[Tool Result: ${block.content}]`);
+          }
         } else if (block.type === 'tool_use') {
           textParts.push(`[Tool Call: ${block.name}(${JSON.stringify(block.input)})]`);
         }

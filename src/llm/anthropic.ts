@@ -114,13 +114,39 @@ export class AnthropicProvider implements LlmProvider {
                 name: block.name,
                 input: block.input,
               };
-            case 'tool_result':
+            case 'tool_result': {
+              let trContent: string | Array<Anthropic.TextBlockParam | Anthropic.ImageBlockParam>;
+              if (typeof block.content === 'string') {
+                trContent = block.content;
+              } else if (Array.isArray(block.content)) {
+                // Convert ContentBlock[] to Anthropic text/image blocks
+                trContent = [];
+                for (const cb of block.content) {
+                  if (cb.type === 'text') {
+                    trContent.push({ type: 'text' as const, text: cb.text });
+                  } else if (cb.type === 'image') {
+                    trContent.push({
+                      type: 'image' as const,
+                      source: {
+                        type: 'base64' as const,
+                        media_type: cb.source.media_type as 'image/jpeg' | 'image/png' | 'image/gif' | 'image/webp',
+                        data: cb.source.data,
+                      },
+                    });
+                  } else {
+                    trContent.push({ type: 'text' as const, text: JSON.stringify(cb) });
+                  }
+                }
+              } else {
+                trContent = JSON.stringify(block.content);
+              }
               return {
                 type: 'tool_result' as const,
                 tool_use_id: block.tool_use_id,
-                content: typeof block.content === 'string' ? block.content : JSON.stringify(block.content),
+                content: trContent,
                 ...(block.is_error ? { is_error: true } : {}),
               };
+            }
             default:
               return { type: 'text' as const, text: JSON.stringify(block) };
           }

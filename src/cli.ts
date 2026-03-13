@@ -361,9 +361,12 @@ async function main(): Promise<void> {
   };
 
   const repl = new Repl({
-    onMessage: async (message: string) => {
+    onMessage: async (message) => {
       // Create checkpoint before each turn
-      checkpointManager.create(conversation, message.slice(0, 50));
+      const preview = typeof message === 'string'
+        ? message.slice(0, 50)
+        : (message.find((b): b is Extract<typeof b, { type: 'text' }> => b.type === 'text')?.text?.slice(0, 50) || 'image');
+      checkpointManager.create(conversation, preview);
 
       // Auto-compact if needed
       if (compressor.shouldCompress(conversation)) {

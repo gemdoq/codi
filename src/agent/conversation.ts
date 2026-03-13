@@ -20,7 +20,7 @@ export class Conversation {
     this.messages.push({ role: 'assistant', content });
   }
 
-  addToolResults(results: Array<{ tool_use_id: string; content: string; is_error?: boolean }>): void {
+  addToolResults(results: Array<{ tool_use_id: string; content: string | ContentBlock[]; is_error?: boolean }>): void {
     const blocks: ContentBlock[] = results.map((r) => ({
       type: 'tool_result' as const,
       tool_use_id: r.tool_use_id,

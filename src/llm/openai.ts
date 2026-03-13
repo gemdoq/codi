@@ -203,14 +203,44 @@ export class OpenAIProvider implements LlmProvider {
       // Handle content blocks
       const hasToolResults = m.content.some((b) => b.type === 'tool_result');
       if (hasToolResults) {
+        const pendingImages: OpenAI.ChatCompletionContentPart[] = [];
         for (const block of m.content) {
           if (block.type === 'tool_result') {
-            result.push({
-              role: 'tool',
-              tool_call_id: block.tool_use_id,
-              content: typeof block.content === 'string' ? block.content : JSON.stringify(block.content),
-            });
+            // Extract text and image blocks from tool result
+            if (Array.isArray(block.content)) {
+              const textParts: string[] = [];
+              for (const cb of block.content) {
+                if (cb.type === 'text') textParts.push(cb.text);
+                else if (cb.type === 'image') {
+                  pendingImages.push({
+                    type: 'image_url' as const,
+                    image_url: { url: `data:${cb.source.media_type};base64,${cb.source.data}` },
+                  });
+                }
+              }
+              result.push({
+                role: 'tool',
+                tool_call_id: block.tool_use_id,
+                content: textParts.join('\n') || '(image)',
+              });
+            } else {
+              result.push({
+                role: 'tool',
+                tool_call_id: block.tool_use_id,
+                content: block.content,
+              });
+            }
           }
+        }
+        // Append images as a separate user message (OpenAI tool messages can't contain images)
+        if (pendingImages.length > 0) {
+          result.push({
+            role: 'user',
+            content: [
+              { type: 'text' as const, text: '위 도구가 반환한 이미지입니다. 이 이미지를 분석에 활용하세요.' },
+              ...pendingImages,
+            ],
+          });
         }
         continue;
       }

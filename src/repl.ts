@@ -24,8 +24,10 @@ function getVersion(): string {
   }
 }
 
+import type { ContentBlock } from './llm/types.js';
+
 export interface ReplOptions {
-  onMessage: (message: string) => Promise<void>;
+  onMessage: (message: string | ContentBlock[]) => Promise<void>;
   onSlashCommand: (command: string, args: string) => Promise<boolean>;
   onInterrupt: () => void;
   onExit?: () => Promise<void>;
@@ -220,10 +222,17 @@ export class Repl {
       return;
     }
 
-    // @ prefix → file reference (prepend file content or image)
-    let message = input;
+    // @ prefix → file reference (prepend file content or image as ContentBlock[])
     const IMAGE_EXTS = new Set(['.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp', '.svg']);
+    const MIME_MAP: Record<string, string> = {
+      '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg',
+      '.gif': 'image/gif', '.webp': 'image/webp', '.bmp': 'image/bmp', '.svg': 'image/svg+xml',
+    };
     const atMatches = input.match(/@([\w.\/\\:~-]+)/g);
+    let hasImages = false;
+    const imageBlocks: ContentBlock[] = [];
+    let message = input;
+
     if (atMatches) {
       for (const match of atMatches) {
         const filePath = match.slice(1);
@@ -232,12 +241,13 @@ export class Repl {
           if (IMAGE_EXTS.has(ext)) {
             const data = readFileSync(filePath);
             const base64 = data.toString('base64');
-            const mimeMap: Record<string, string> = {
-              '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg',
-              '.gif': 'image/gif', '.webp': 'image/webp', '.bmp': 'image/bmp', '.svg': 'image/svg+xml',
-            };
-            const mime = mimeMap[ext] || 'image/png';
-            message = message.replace(match, `\n[Image: ${filePath}](data:${mime};base64,${base64})\n`);
+            const mime = MIME_MAP[ext] || 'image/png';
+            imageBlocks.push({
+              type: 'image',
+              source: { type: 'base64', media_type: mime, data: base64 },
+            });
+            message = message.replace(match, `[이미지: ${path.basename(filePath)}]`);
+            hasImages = true;
           } else {
             const content = readFileSync(filePath, 'utf-8');
             message = message.replace(match, `\n[File: ${filePath}]\n\`\`\`\n${content}\n\`\`\`\n`);
@@ -248,7 +258,16 @@ export class Repl {
       }
     }
 
-    await this.options.onMessage(message);
+    if (hasImages) {
+      // Send as ContentBlock[] so LLM receives actual image data
+      const blocks: ContentBlock[] = [
+        { type: 'text', text: message.trim() },
+        ...imageBlocks,
+      ];
+      await this.options.onMessage(blocks);
+    } else {
+      await this.options.onMessage(message);
+    }
   }
 
   openEditor(): string | null {

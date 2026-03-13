@@ -127,12 +127,33 @@ export async function agentLoop(
 
       const results = await executor.executeMany(response.toolCalls);
 
-      // Add tool results to conversation
-      const toolResults = results.map((r) => ({
-        tool_use_id: r.toolUseId,
-        content: r.result.output,
-        is_error: !r.result.success,
-      }));
+      // Add tool results to conversation (with image support)
+      const toolResults = results.map((r) => {
+        // If tool returned image data, send as ContentBlock[] so LLM can actually see it
+        if (r.result.metadata?.isImage && r.result.metadata.imageData) {
+          const blocks: ContentBlock[] = [
+            { type: 'text', text: r.result.output },
+            {
+              type: 'image',
+              source: {
+                type: 'base64',
+                media_type: r.result.metadata.imageMimeType || 'image/png',
+                data: r.result.metadata.imageData,
+              },
+            },
+          ];
+          return {
+            tool_use_id: r.toolUseId,
+            content: blocks,
+            is_error: !r.result.success,
+          };
+        }
+        return {
+          tool_use_id: r.toolUseId,
+          content: r.result.output,
+          is_error: !r.result.success,
+        };
+      });
 
       conversation.addToolResults(toolResults);
     }
