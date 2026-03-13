@@ -1,4 +1,5 @@
 import * as fs from 'fs';
+import * as os from 'os';
 import * as path from 'path';
 import chalk from 'chalk';
 import { tokenTracker } from '../agent/token-tracker.js';
@@ -375,6 +376,126 @@ export function createBuiltinCommands(): SlashCommand[] {
           console.log(chalk.yellow('Not a git repository or git not available.'));
         }
         return true;
+      },
+    },
+    {
+      name: '/commit',
+      description: 'Generate commit message and commit with AI',
+      handler: async (_args, ctx) => {
+        const { execSync } = await import('child_process');
+        try {
+          const staged = execSync('git diff --cached', { encoding: 'utf-8', cwd: process.cwd() });
+          const unstaged = execSync('git diff', { encoding: 'utf-8', cwd: process.cwd() });
+          const diff = staged + unstaged;
+          if (!diff.trim()) {
+            console.log(chalk.dim('\nNo changes to commit.\n'));
+            return true;
+          }
+          ctx.conversation.addUserMessage(
+            `다음 git diff를 분석해서 적절한 커밋 메시지를 생성하고, git 도구로 변경된 파일을 add하고 커밋해줘.\n\n\`\`\`diff\n${diff}\n\`\`\``
+          );
+          return false;
+        } catch {
+          console.log(chalk.yellow('Not a git repository or git not available.'));
+          return true;
+        }
+      },
+    },
+    {
+      name: '/review',
+      description: 'AI code review of current changes',
+      handler: async (_args, ctx) => {
+        const { execSync } = await import('child_process');
+        try {
+          const staged = execSync('git diff --cached', { encoding: 'utf-8', cwd: process.cwd() });
+          const unstaged = execSync('git diff', { encoding: 'utf-8', cwd: process.cwd() });
+          const diff = staged + unstaged;
+          if (!diff.trim()) {
+            console.log(chalk.dim('\nNo changes to review.\n'));
+            return true;
+          }
+          ctx.conversation.addUserMessage(
+            `다음 git diff를 코드 리뷰해줘. 보안 취약점, 버그, 성능, 코드 스타일 관점에서 분석하고 개선 사항을 알려줘.\n\n\`\`\`diff\n${diff}\n\`\`\``
+          );
+          return false;
+        } catch {
+          console.log(chalk.yellow('Not a git repository or git not available.'));
+          return true;
+        }
+      },
+    },
+    {
+      name: '/search',
+      description: 'Search past conversation sessions',
+      handler: async (args) => {
+        if (!args) {
+          console.log(chalk.yellow('Usage: /search <keyword>'));
+          return true;
+        }
+        const home = process.env['HOME'] || process.env['USERPROFILE'] || '~';
+        const sessionsDir = path.join(home, '.codi', 'sessions');
+        if (!fs.existsSync(sessionsDir)) {
+          console.log(chalk.dim('\nNo sessions found.\n'));
+          return true;
+        }
+        const files = fs.readdirSync(sessionsDir).filter((f) => f.endsWith('.jsonl'));
+        const results: { sessionId: string; date: string; preview: string }[] = [];
+        const keyword = args.toLowerCase();
+
+        for (const file of files) {
+          if (results.length >= 10) break;
+          const filePath = path.join(sessionsDir, file);
+          const lines = fs.readFileSync(filePath, 'utf-8').split('\n').filter(Boolean);
+          for (const line of lines) {
+            if (results.length >= 10) break;
+            if (line.toLowerCase().includes(keyword)) {
+              const sessionId = file.replace('.jsonl', '');
+              const stat = fs.statSync(filePath);
+              const date = stat.mtime.toISOString().split('T')[0]!;
+              const preview = line.length > 100 ? line.slice(0, 100) + '...' : line;
+              results.push({ sessionId, date, preview });
+              break; // one match per session
+            }
+          }
+        }
+
+        if (results.length === 0) {
+          console.log(chalk.dim(`\nNo results for "${args}".\n`));
+        } else {
+          console.log(chalk.bold(`\nSearch results for "${args}":\n`));
+          for (const r of results) {
+            console.log(`  ${chalk.cyan(r.sessionId)} ${chalk.dim(r.date)}`);
+            console.log(`    ${chalk.dim(r.preview)}`);
+          }
+          console.log('');
+        }
+        return true;
+      },
+    },
+    {
+      name: '/fix',
+      description: 'Run a command and auto-fix errors (e.g., /fix npm run build)',
+      handler: async (args, ctx) => {
+        if (!args) {
+          console.log(chalk.yellow('Usage: /fix <command>'));
+          return true;
+        }
+        const { execSync } = await import('child_process');
+        try {
+          const shell = os.platform() === 'win32' ? 'powershell.exe' : undefined;
+          const output = execSync(args, { encoding: 'utf-8', cwd: process.cwd(), stdio: 'pipe', shell });
+          console.log(chalk.green(`\n✓ Command succeeded. No errors to fix.\n`));
+          if (output.trim()) console.log(chalk.dim(output));
+          return true;
+        } catch (err: unknown) {
+          const error = err as { stdout?: string; stderr?: string };
+          const errorOutput = (error.stderr || '') + (error.stdout || '');
+          console.log(chalk.red(`\nCommand failed: ${args}\n`));
+          ctx.conversation.addUserMessage(
+            `다음 명령어를 실행했더니 에러가 발생했어. 에러를 분석하고 코드를 수정해줘.\n\nCommand: ${args}\n\n\`\`\`\n${errorOutput}\n\`\`\``
+          );
+          return false;
+        }
       },
     },
     {

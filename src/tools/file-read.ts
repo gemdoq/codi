@@ -120,7 +120,9 @@ export const fileReadTool: Tool = {
 
     // Text files
     try {
-      const content = fs.readFileSync(resolved, 'utf-8');
+      const raw = fs.readFileSync(resolved, 'utf-8');
+      // Normalize CRLF → LF for consistent display across platforms
+      const content = raw.replace(/\r\n/g, '\n');
       const lines = content.split('\n');
       const totalLines = lines.length;
 

@@ -1,11 +1,12 @@
 import { execFile } from 'child_process';
+import * as fs from 'fs';
 import * as path from 'path';
 import type { Tool, ToolResult } from './tool.js';
 import { makeToolResult, makeToolError } from './tool.js';
 
 export const grepTool: Tool = {
   name: 'grep',
-  description: `Search file contents using regex patterns. Uses ripgrep (rg) if available, falls back to grep. Supports context lines, file type filters, and multiple output modes.`,
+  description: `Search file contents using regex patterns. Uses ripgrep (rg) if available, falls back to grep, then to a built-in Node.js search. Supports context lines, file type filters, and multiple output modes.`,
   inputSchema: {
     type: 'object',
     properties: {
@@ -37,21 +38,27 @@ export const grepTool: Tool = {
     const outputMode = (input['output_mode'] as string) || 'files_with_matches';
     const headLimit = (input['head_limit'] as number) || 0;
 
+    // Try ripgrep first, then grep, then built-in fallback
+    const hasRg = await hasCommand('rg');
+    const hasGrep = !hasRg && await hasCommand('grep');
+
+    if (!hasRg && !hasGrep) {
+      // Pure Node.js fallback — works on all platforms without external tools
+      return builtinSearch(pattern, searchPath, input, outputMode, headLimit);
+    }
+
+    const cmd = hasRg ? 'rg' : 'grep';
     const args: string[] = [];
 
-    // Try ripgrep first, fall back to grep
-    const useRg = await hasCommand('rg');
-    const cmd = useRg ? 'rg' : 'grep';
-
-    if (!useRg) {
+    if (!hasRg) {
       args.push('-r'); // recursive for grep
     }
 
     // Output mode
     if (outputMode === 'files_with_matches') {
-      args.push(useRg ? '-l' : '-l');
+      args.push('-l');
     } else if (outputMode === 'count') {
-      args.push(useRg ? '-c' : '-c');
+      args.push('-c');
     }
 
     // Case insensitive
@@ -68,22 +75,22 @@ export const grepTool: Tool = {
     if (input['-B']) args.push('-B', String(input['-B']));
 
     // Multiline (rg only)
-    if (input['multiline'] && useRg) {
+    if (input['multiline'] && hasRg) {
       args.push('-U', '--multiline-dotall');
     }
 
     // File type filter
-    if (input['type'] && useRg) {
+    if (input['type'] && hasRg) {
       args.push('--type', String(input['type']));
     }
 
     // Glob filter
-    if (input['glob'] && useRg) {
+    if (input['glob'] && hasRg) {
       args.push('--glob', String(input['glob']));
     }
 
     // Ignore common dirs
-    if (useRg) {
+    if (hasRg) {
       args.push('--no-ignore-vcs');
       args.push('-g', '!node_modules');
       args.push('-g', '!.git');
@@ -119,8 +126,9 @@ export const grepTool: Tool = {
 };
 
 function hasCommand(cmd: string): Promise<boolean> {
+  const checkCmd = process.platform === 'win32' ? 'where' : 'which';
   return new Promise((resolve) => {
-    execFile('which', [cmd], (err) => resolve(!err));
+    execFile(checkCmd, [cmd], (err) => resolve(!err));
   });
 }
 
@@ -135,4 +143,174 @@ function runCommand(cmd: string, args: string[]): Promise<string> {
       resolve(stdout);
     });
   });
+}
+
+// ─── Built-in Node.js search fallback ────────────────────────────────
+
+const IGNORE_DIRS = new Set(['node_modules', '.git', 'dist', 'build', '.next', '__pycache__', '.cache', 'coverage']);
+const BINARY_EXTENSIONS = new Set(['.png', '.jpg', '.jpeg', '.gif', '.ico', '.woff', '.woff2', '.ttf', '.eot', '.pdf', '.zip', '.tar', '.gz', '.exe', '.dll', '.so', '.dylib']);
+
+const TYPE_EXTENSIONS: Record<string, string[]> = {
+  ts: ['.ts', '.tsx'],
+  js: ['.js', '.jsx', '.mjs', '.cjs'],
+  py: ['.py'],
+  java: ['.java'],
+  kt: ['.kt', '.kts'],
+  go: ['.go'],
+  rs: ['.rs'],
+  rb: ['.rb'],
+  css: ['.css', '.scss', '.less'],
+  html: ['.html', '.htm'],
+  json: ['.json'],
+  yaml: ['.yaml', '.yml'],
+  md: ['.md'],
+  xml: ['.xml'],
+};
+
+async function builtinSearch(
+  pattern: string,
+  searchPath: string,
+  input: Record<string, unknown>,
+  outputMode: string,
+  headLimit: number,
+): Promise<ToolResult> {
+  const caseInsensitive = input['-i'] === true;
+  const showLineNumbers = input['-n'] !== false && outputMode === 'content';
+  const contextBefore = Number(input['-C'] || input['-B'] || 0);
+  const contextAfter = Number(input['-C'] || input['-A'] || 0);
+  const typeFilter = input['type'] ? String(input['type']) : undefined;
+  const globFilter = input['glob'] ? String(input['glob']) : undefined;
+
+  let regex: RegExp;
+  try {
+    regex = new RegExp(pattern, caseInsensitive ? 'gi' : 'g');
+  } catch {
+    return makeToolError(`Invalid regex pattern: ${pattern}`);
+  }
+
+  const files = collectFiles(searchPath, typeFilter, globFilter);
+  const results: string[] = [];
+  const fileCounts: Map<string, number> = new Map();
+  let entryCount = 0;
+
+  for (const filePath of files) {
+    if (headLimit > 0 && entryCount >= headLimit) break;
+
+    let content: string;
+    try {
+      content = fs.readFileSync(filePath, 'utf-8');
+    } catch {
+      continue;
+    }
+
+    const lines = content.split('\n');
+    const matchedLineIndices: Set<number> = new Set();
+    let fileMatchCount = 0;
+
+    for (let i = 0; i < lines.length; i++) {
+      if (regex.test(lines[i]!)) {
+        matchedLineIndices.add(i);
+        fileMatchCount++;
+      }
+      regex.lastIndex = 0; // Reset regex state for global flag
+    }
+
+    if (fileMatchCount === 0) continue;
+
+    if (outputMode === 'files_with_matches') {
+      results.push(filePath);
+      entryCount++;
+    } else if (outputMode === 'count') {
+      fileCounts.set(filePath, fileMatchCount);
+      entryCount++;
+    } else {
+      // content mode — collect matched lines with context
+      const outputLines: Set<number> = new Set();
+      for (const idx of matchedLineIndices) {
+        for (let j = Math.max(0, idx - contextBefore); j <= Math.min(lines.length - 1, idx + contextAfter); j++) {
+          outputLines.add(j);
+        }
+      }
+
+      const sortedIndices = [...outputLines].sort((a, b) => a - b);
+      let lastIdx = -2;
+      for (const idx of sortedIndices) {
+        if (headLimit > 0 && entryCount >= headLimit) break;
+
+        if (idx > lastIdx + 1 && lastIdx >= 0) {
+          results.push('--'); // separator between non-contiguous groups
+        }
+        const prefix = showLineNumbers ? `${filePath}:${idx + 1}:` : `${filePath}:`;
+        results.push(`${prefix}${lines[idx]}`);
+        entryCount++;
+        lastIdx = idx;
+      }
+    }
+  }
+
+  if (outputMode === 'count') {
+    for (const [file, count] of fileCounts) {
+      results.push(`${file}:${count}`);
+    }
+  }
+
+  if (results.length === 0) {
+    return makeToolResult(`No matches found for pattern: ${pattern}`);
+  }
+
+  return makeToolResult(results.join('\n'));
+}
+
+function collectFiles(dirPath: string, typeFilter?: string, globFilter?: string): string[] {
+  const files: string[] = [];
+  const allowedExtensions = typeFilter && TYPE_EXTENSIONS[typeFilter] ? new Set(TYPE_EXTENSIONS[typeFilter]) : null;
+
+  // Convert simple glob to regex (e.g., "*.ts" → /\.ts$/)
+  let globRegex: RegExp | null = null;
+  if (globFilter) {
+    const escaped = globFilter
+      .replace(/[.+^${}()|[\]\\]/g, '\\$&')
+      .replace(/\*/g, '.*')
+      .replace(/\?/g, '.');
+    globRegex = new RegExp(`^${escaped}$`);
+  }
+
+  function walk(dir: string): void {
+    let entries: fs.Dirent[];
+    try {
+      entries = fs.readdirSync(dir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+
+    for (const entry of entries) {
+      if (IGNORE_DIRS.has(entry.name)) continue;
+      if (entry.name.startsWith('.') && entry.name !== '.') continue;
+
+      const fullPath = path.join(dir, entry.name);
+
+      if (entry.isDirectory()) {
+        walk(fullPath);
+      } else if (entry.isFile()) {
+        const ext = path.extname(entry.name).toLowerCase();
+        if (BINARY_EXTENSIONS.has(ext)) continue;
+        if (allowedExtensions && !allowedExtensions.has(ext)) continue;
+        if (globRegex && !globRegex.test(entry.name)) continue;
+        files.push(fullPath);
+      }
+    }
+  }
+
+  // If searchPath is a file, just search that file
+  try {
+    const stat = fs.statSync(dirPath);
+    if (stat.isFile()) {
+      return [dirPath];
+    }
+  } catch {
+    return [];
+  }
+
+  walk(dirPath);
+  return files;
 }

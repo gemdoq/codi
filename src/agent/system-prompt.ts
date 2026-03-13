@@ -23,6 +23,22 @@ const TOOL_HIERARCHY = `# Tool Usage Rules
 - Use sub_agent for complex multi-step exploration tasks
 - Call multiple tools in parallel when they are independent`;
 
+const WINDOWS_RULES = `# Windows Shell Rules
+You are running on Windows. The shell is PowerShell. Follow these rules:
+- Use PowerShell syntax, NOT bash/sh syntax
+- Path separators: use \\\\ or / (PowerShell accepts both)
+- mkdir works without -p flag (PowerShell creates parent directories automatically)
+- Use gradlew.bat instead of ./gradlew for Gradle projects
+- Use mvnw.cmd instead of ./mvnw for Maven projects
+- Do NOT use chmod (not available on Windows)
+- Do NOT use HEREDOC (cat <<EOF) — use write_file tool instead
+- Use Remove-Item instead of rm -rf
+- Use Get-ChildItem instead of ls -la
+- Use Invoke-WebRequest or curl.exe instead of curl
+- Environment variables: use $env:VAR_NAME instead of $VAR_NAME
+- Use semicolons (;) or separate commands instead of && for chaining
+- Scripts: use .ps1 files instead of .sh files`;
+
 const CODE_RULES = `# Code Modification Rules
 - ALWAYS read a file before editing it
 - Prefer edit_file over write_file for existing files
@@ -69,6 +85,11 @@ export function buildSystemPrompt(context: PromptContext): string {
   // Tool usage rules
   fragments.push(TOOL_HIERARCHY);
 
+  // Windows-specific rules
+  if (os.platform() === 'win32') {
+    fragments.push(WINDOWS_RULES);
+  }
+
   // Code modification rules
   fragments.push(CODE_RULES);
 
@@ -112,7 +133,7 @@ function buildEnvironmentInfo(context: PromptContext): string {
     '# Environment',
     `- Date: ${new Date().toISOString().split('T')[0]}`,
     `- OS: ${os.platform()} ${os.release()}`,
-    `- Shell: ${process.env['SHELL'] || 'unknown'}`,
+    `- Shell: ${process.env['SHELL'] || process.env['COMSPEC'] || 'unknown'}`,
     `- Working Directory: ${context.cwd}`,
     `- Model: ${context.model}`,
     `- Provider: ${context.provider}`,

@@ -1,6 +1,16 @@
 import { exec, spawn } from 'child_process';
+import * as os from 'os';
 import type { Tool, ToolResult } from './tool.js';
 import { makeToolResult, makeToolError } from './tool.js';
+
+function getDefaultShell(): string {
+  if (os.platform() === 'win32') {
+    // PowerShell is preferred on Windows — it supports many Unix-like commands
+    // (mkdir, rm, cat, curl, etc.) and handles paths more gracefully than cmd.exe
+    return 'powershell.exe';
+  }
+  return process.env['SHELL'] || '/bin/bash';
+}
 
 // Background tasks storage
 const backgroundTasks: Map<string, {
@@ -14,7 +24,7 @@ let taskCounter = 0;
 
 export const bashTool: Tool = {
   name: 'bash',
-  description: `Execute a bash command. Supports timeout (max 600s, default 120s) and background execution. The working directory persists between calls.`,
+  description: `Execute a shell command. Supports timeout (max 600s, default 120s) and background execution. The working directory persists between calls. Uses the platform default shell (bash on Unix, cmd.exe on Windows).`,
   inputSchema: {
     type: 'object',
     properties: {
@@ -45,7 +55,7 @@ export const bashTool: Tool = {
       exec(command, {
         timeout,
         maxBuffer: 10 * 1024 * 1024,
-        shell: process.env['SHELL'] || '/bin/bash',
+        shell: getDefaultShell(),
         cwd: process.cwd(),
         env: { ...process.env },
       }, (err, stdout, stderr) => {
@@ -80,7 +90,7 @@ function runBackgroundTask(command: string): ToolResult {
   const taskId = `bg_${++taskCounter}`;
 
   const proc = spawn(command, {
-    shell: process.env['SHELL'] || '/bin/bash',
+    shell: getDefaultShell(),
     cwd: process.cwd(),
     env: { ...process.env },
     stdio: ['ignore', 'pipe', 'pipe'],
@@ -122,7 +132,7 @@ export function stopBackgroundTask(taskId: string): boolean {
   const task = backgroundTasks.get(taskId);
   if (!task || task.status !== 'running') return false;
   try {
-    task.process.kill('SIGTERM');
+    task.process.kill();
     task.status = 'done';
     return true;
   } catch {

@@ -1,8 +1,11 @@
 import * as fs from 'fs';
+import * as os from 'os';
 import * as path from 'path';
 import chalk from 'chalk';
 import * as readline from 'node:readline/promises';
 import { stdin as input, stdout as output } from 'process';
+
+const isWindows = os.platform() === 'win32';
 
 const SETTINGS_DIR = path.join(
   process.env['HOME'] || process.env['USERPROFILE'] || '~',
@@ -117,7 +120,10 @@ export async function runSetupWizard(): Promise<SetupResult | null> {
 
   if (!apiKey.trim()) {
     console.log(chalk.yellow('\n  No API key provided. Setup cancelled.'));
-    console.log(chalk.dim(`  You can set it later: export ${envVarName}=your-key\n`));
+    const laterCmd = isWindows
+      ? `$env:${envVarName}="your-key"`
+      : `export ${envVarName}=your-key`;
+    console.log(chalk.dim(`  You can set it later: ${laterCmd}\n`));
     return null;
   }
 
@@ -137,11 +143,20 @@ export async function runSetupWizard(): Promise<SetupResult | null> {
 
   if (saveChoice.trim() === '2') {
     console.log('');
-    console.log(chalk.bold('  Add this to your shell profile (~/.zshrc or ~/.bashrc):'));
-    console.log('');
-    console.log(chalk.cyan(`    export ${envVarName}=${trimmedKey}`));
-    console.log('');
-    console.log(chalk.dim('  Then restart your terminal or run: source ~/.zshrc'));
+    if (isWindows) {
+      console.log(chalk.bold('  Run this command in PowerShell (admin) to set permanently:'));
+      console.log('');
+      console.log(chalk.cyan(`    [System.Environment]::SetEnvironmentVariable('${envVarName}', '${trimmedKey}', 'User')`));
+      console.log('');
+      console.log(chalk.dim('  Or set temporarily for this session:'));
+      console.log(chalk.cyan(`    $env:${envVarName}="${trimmedKey}"`));
+    } else {
+      console.log(chalk.bold('  Add this to your shell profile (~/.zshrc or ~/.bashrc):'));
+      console.log('');
+      console.log(chalk.cyan(`    export ${envVarName}=${trimmedKey}`));
+      console.log('');
+      console.log(chalk.dim('  Then restart your terminal or run: source ~/.zshrc'));
+    }
     console.log('');
     return { apiKey: trimmedKey, provider };
   }
@@ -183,7 +198,10 @@ export async function runSetupWizard(): Promise<SetupResult | null> {
     console.log('');
   } catch (err) {
     console.log(chalk.red(`\n  Failed to save settings: ${err}`));
-    console.log(chalk.dim(`  Set manually: export ${envVarName}=${trimmedKey}\n`));
+    const manualCmd = isWindows
+      ? `$env:${envVarName}="${trimmedKey}"`
+      : `export ${envVarName}=${trimmedKey}`;
+    console.log(chalk.dim(`  Set manually: ${manualCmd}\n`));
   }
 
   return { apiKey: trimmedKey, provider };

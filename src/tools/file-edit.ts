@@ -32,7 +32,10 @@ export const fileEditTool: Tool = {
     }
 
     try {
-      let content = fs.readFileSync(resolved, 'utf-8');
+      const raw = fs.readFileSync(resolved, 'utf-8');
+      const hasCrlf = raw.includes('\r\n');
+      // Normalize CRLF → LF for matching, preserve original line endings on write
+      let content = hasCrlf ? raw.replace(/\r\n/g, '\n') : raw;
 
       if (oldString === newString) {
         return makeToolError('old_string and new_string are identical. No changes needed.');
@@ -71,7 +74,9 @@ export const fileEditTool: Tool = {
         content = content.slice(0, idx) + newString + content.slice(idx + oldString.length);
       }
 
-      fs.writeFileSync(resolved, content, 'utf-8');
+      // Restore original line endings if file used CRLF
+      const output = hasCrlf ? content.replace(/\n/g, '\r\n') : content;
+      fs.writeFileSync(resolved, output, 'utf-8');
 
       const linesChanged = Math.max(
         oldString.split('\n').length,

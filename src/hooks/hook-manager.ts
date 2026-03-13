@@ -1,6 +1,14 @@
 import { exec } from 'child_process';
+import * as os from 'os';
 import type { ToolResult } from '../tools/tool.js';
 import { configManager, type HookConfig } from '../config/config.js';
+
+function getDefaultShell(): string | undefined {
+  if (os.platform() === 'win32') {
+    return 'powershell.exe';
+  }
+  return undefined; // let Node.js use system default on Unix
+}
 
 export type HookEvent = 'PreToolUse' | 'PostToolUse' | 'SessionStart' | 'SessionEnd' | 'PreCompact' | 'Stop';
 
@@ -65,6 +73,7 @@ export class HookManager {
         timeout: timeout || 5000,
         cwd: process.cwd(),
         env: { ...process.env },
+        shell: getDefaultShell(),
       }, (err, stdout, stderr) => {
         if (err) {
           // Exit code 2 means block

@@ -1,5 +1,6 @@
 import * as readline from 'node:readline/promises';
 import { stdin as input, stdout as output } from 'process';
+import * as os from 'os';
 import chalk from 'chalk';
 import { execSync } from 'child_process';
 import { edit } from 'external-editor';
@@ -161,10 +162,12 @@ export class Repl {
       const cmd = input.slice(1).trim();
       if (!cmd) return;
       try {
+        const shell = os.platform() === 'win32' ? 'powershell.exe' : undefined;
         const result = execSync(cmd, {
           encoding: 'utf-8',
           stdio: ['inherit', 'pipe', 'pipe'],
           timeout: 30_000,
+          shell,
         });
         console.log(result);
       } catch (err: any) {

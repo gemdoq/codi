@@ -14,10 +14,12 @@ export function isSandboxAvailable(): boolean {
 
   const platform = os.platform();
 
+  const checkCmd = platform === 'win32' ? 'where' : 'which';
+
   if (platform === 'darwin') {
     // Check for sandbox-exec (macOS Seatbelt)
     try {
-      execSync('which sandbox-exec', { stdio: 'pipe' });
+      execSync(`${checkCmd} sandbox-exec`, { stdio: 'pipe' });
       sandboxAvailable = true;
     } catch {
       sandboxAvailable = false;
@@ -25,12 +27,13 @@ export function isSandboxAvailable(): boolean {
   } else if (platform === 'linux') {
     // Check for bubblewrap
     try {
-      execSync('which bwrap', { stdio: 'pipe' });
+      execSync(`${checkCmd} bwrap`, { stdio: 'pipe' });
       sandboxAvailable = true;
     } catch {
       sandboxAvailable = false;
     }
   } else {
+    // Windows: no sandbox support yet
     sandboxAvailable = false;
   }
 
@@ -55,7 +58,7 @@ export function wrapCommand(command: string, config: SandboxConfig): string {
 
 function wrapWithSeatbelt(command: string, config: SandboxConfig): string {
   const cwd = process.cwd();
-  const home = process.env['HOME'] || '~';
+  const home = process.env['HOME'] || process.env['USERPROFILE'] || '~';
 
   // Build sandbox profile
   const profile = [
@@ -98,7 +101,7 @@ function wrapWithSeatbelt(command: string, config: SandboxConfig): string {
 
 function wrapWithBubblewrap(command: string, config: SandboxConfig): string {
   const cwd = process.cwd();
-  const home = process.env['HOME'] || '~';
+  const home = process.env['HOME'] || process.env['USERPROFILE'] || '~';
 
   const args = [
     'bwrap',

@@ -42,7 +42,10 @@ export const fileMultiEditTool: Tool = {
     }
 
     try {
-      let content = fs.readFileSync(resolved, 'utf-8');
+      const raw = fs.readFileSync(resolved, 'utf-8');
+      const hasCrlf = raw.includes('\r\n');
+      // Normalize CRLF → LF for matching, preserve original line endings on write
+      let content = hasCrlf ? raw.replace(/\r\n/g, '\n') : raw;
 
       // Validate all edits first
       for (let i = 0; i < edits.length; i++) {
@@ -68,7 +71,9 @@ export const fileMultiEditTool: Tool = {
         );
       }
 
-      fs.writeFileSync(resolved, content, 'utf-8');
+      // Restore original line endings if file used CRLF
+      const output = hasCrlf ? content.replace(/\n/g, '\r\n') : content;
+      fs.writeFileSync(resolved, output, 'utf-8');
 
       return makeToolResult(`Applied ${edits.length} edits to ${resolved}`, {
         filePath: resolved,
