@@ -1,4 +1,5 @@
 import type { Message, ContentBlock } from '../llm/types.js';
+import { countTokens, countMessageTokens } from '../utils/tokenizer.js';
 
 export class Conversation {
   private messages: Message[] = [];
@@ -100,24 +101,13 @@ export class Conversation {
   }
 
   /**
-   * Estimate rough token count (very approximate).
+   * tiktoken을 사용하여 정확한 토큰 수를 계산한다.
    */
-  estimateTokens(): number {
-    let chars = this.systemPrompt.length;
+  estimateTokens(model?: string): number {
+    let tokens = countTokens(this.systemPrompt, model);
     for (const msg of this.messages) {
-      if (typeof msg.content === 'string') {
-        chars += msg.content.length;
-      } else {
-        for (const block of msg.content) {
-          if (block.type === 'text') chars += block.text.length;
-          else if (block.type === 'tool_use') chars += JSON.stringify(block.input).length;
-          else if (block.type === 'tool_result') {
-            chars += typeof block.content === 'string' ? block.content.length : JSON.stringify(block.content).length;
-          }
-        }
-      }
+      tokens += countMessageTokens(msg.content, model);
     }
-    // Rough estimate: ~4 chars per token
-    return Math.ceil(chars / 4);
+    return tokens;
   }
 }

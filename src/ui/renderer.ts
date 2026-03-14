@@ -90,13 +90,19 @@ export function renderToolCall(toolName: string, args: Record<string, unknown>):
   return `${header}\n${argStr}`;
 }
 
-export function renderToolResult(toolName: string, result: string, isError: boolean): string {
+export function renderToolResult(toolName: string, result: string, isError: boolean, durationMs?: number): string {
   const icon = isError ? chalk.red('✗') : chalk.green('✓');
-  const header = `${icon} ${chalk.yellow(toolName)}`;
+  const duration = durationMs != null ? chalk.dim(` (${formatDuration(durationMs)})`) : '';
+  const header = `${icon} ${chalk.yellow(toolName)}${duration}`;
   const content = isError ? chalk.red(result) : chalk.dim(result);
   const maxLen = 500;
   const truncated = content.length > maxLen ? content.slice(0, maxLen) + chalk.dim('\n... (truncated)') : content;
   return `${header}\n${truncated}`;
+}
+
+function formatDuration(ms: number): string {
+  if (ms < 1000) return `${ms}ms`;
+  return `${(ms / 1000).toFixed(1)}s`;
 }
 
 export function renderError(message: string): string {

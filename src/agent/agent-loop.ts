@@ -8,6 +8,7 @@ import { statusLine } from '../ui/status-line.js';
 import { startSpinner, stopSpinner, updateSpinner } from '../ui/spinner.js';
 import { renderMarkdown, renderAssistantPrefix } from '../ui/renderer.js';
 import chalk from 'chalk';
+import { logger } from '../utils/logger.js';
 
 export interface AgentLoopOptions {
   provider: LlmProvider;
@@ -70,6 +71,7 @@ export async function agentLoop(
     } catch (err) {
       stopSpinner();
       const errMsg = err instanceof Error ? err.message : String(err);
+      logger.error('LLM 호출 실패', { model: provider.model }, err instanceof Error ? err : new Error(errMsg));
       if (showOutput) {
         console.error(chalk.red(`\nLLM Error: ${errMsg}`));
       }
@@ -86,6 +88,13 @@ export async function agentLoop(
         inputTokens: stats.inputTokens,
         outputTokens: stats.outputTokens,
         cost: stats.cost,
+      });
+      logger.debug('LLM 응답 수신', {
+        model: provider.model,
+        inputTokens: response.usage.input_tokens,
+        outputTokens: response.usage.output_tokens,
+        stopReason: response.stopReason,
+        toolCalls: response.toolCalls?.length ?? 0,
       });
     }
 

@@ -2,6 +2,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import type { Tool, ToolResult } from './tool.js';
 import { makeToolResult, makeToolError } from './tool.js';
+import { backupFile } from './file-backup.js';
 
 export const fileMultiEditTool: Tool = {
   name: 'multi_edit',
@@ -70,6 +71,9 @@ export const fileMultiEditTool: Tool = {
           edit.new_string.split('\n').length
         );
       }
+
+      // 쓰기 전에 백업 생성
+      backupFile(resolved);
 
       // Restore original line endings if file used CRLF
       const output = hasCrlf ? content.replace(/\n/g, '\r\n') : content;

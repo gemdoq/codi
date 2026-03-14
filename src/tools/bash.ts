@@ -1,7 +1,20 @@
-import { exec, spawn } from 'child_process';
+import { spawn } from 'child_process';
 import * as os from 'os';
+import chalk from 'chalk';
 import type { Tool, ToolResult } from './tool.js';
 import { makeToolResult, makeToolError } from './tool.js';
+import { validateCommand } from '../security/command-validator.js';
+import { getPermissionMode } from '../security/permission-manager.js';
+import { logger } from '../utils/logger.js';
+
+export type BashOutputCallback = (chunk: string) => void;
+
+// 현재 실행에 사용할 onOutput 콜백 (executor에서 설정)
+let _currentOnOutput: BashOutputCallback | null = null;
+
+export function setBashOutputCallback(cb: BashOutputCallback | null): void {
+  _currentOnOutput = cb;
+}
 
 function getDefaultShell(): string {
   if (os.platform() === 'win32') {
@@ -47,6 +60,17 @@ export const bashTool: Tool = {
       return makeToolError('Command cannot be empty');
     }
 
+    // --yolo 모드가 아닐 때만 명령어 검증 수행
+    if (getPermissionMode() !== 'yolo') {
+      const validation = validateCommand(command);
+      if (!validation.allowed) {
+        return makeToolError(`명령어가 차단되었습니다: ${validation.reason}`);
+      }
+      if (validation.level === 'warned') {
+        console.log(chalk.yellow(`⚠ 경고: ${validation.reason}`));
+      }
+    }
+
     if (runInBackground) {
       return runBackgroundTask(command);
     }
@@ -57,28 +81,72 @@ export const bashTool: Tool = {
         ? `[Console]::OutputEncoding = [System.Text.Encoding]::UTF8; ${command}`
         : command;
 
-      exec(finalCommand, {
-        timeout,
-        maxBuffer: 10 * 1024 * 1024,
+      const startTime = Date.now();
+      let stdout = '';
+      let stderr = '';
+      let timedOut = false;
+
+      const proc = spawn(finalCommand, {
         shell: getDefaultShell(),
         cwd: process.cwd(),
         env: { ...process.env },
-      }, (err, stdout, stderr) => {
-        if (err) {
-          const exitCode = err.code;
+        stdio: ['ignore', 'pipe', 'pipe'],
+      });
+
+      // 타임아웃 처리
+      const timer = setTimeout(() => {
+        timedOut = true;
+        proc.kill('SIGTERM');
+        // SIGTERM 후 5초 내 종료되지 않으면 SIGKILL
+        setTimeout(() => proc.kill('SIGKILL'), 5000);
+      }, timeout);
+
+      const onOutput = _currentOnOutput;
+
+      proc.stdout?.on('data', (data: Buffer) => {
+        const chunk = data.toString();
+        stdout += chunk;
+        if (onOutput) {
+          onOutput(chunk);
+        }
+      });
+
+      proc.stderr?.on('data', (data: Buffer) => {
+        const chunk = data.toString();
+        stderr += chunk;
+        if (onOutput) {
+          onOutput(chunk);
+        }
+      });
+
+      proc.on('close', (code) => {
+        clearTimeout(timer);
+        const durationMs = Date.now() - startTime;
+        const exitCode = code ?? 1;
+
+        if (timedOut) {
+          logger.info('bash 명령어 실행', { command, exitCode, durationMs, timedOut: true });
           const output = [
             stdout ? `stdout:\n${stdout}` : '',
             stderr ? `stderr:\n${stderr}` : '',
             `Exit code: ${exitCode}`,
           ].filter(Boolean).join('\n\n');
-
-          if ((err as any).killed) {
-            resolve(makeToolError(`Command timed out after ${timeout / 1000}s\n${output}`));
-          } else {
-            resolve(makeToolResult(output || `Command failed with exit code ${exitCode}`));
-          }
+          resolve(makeToolError(`Command timed out after ${timeout / 1000}s\n${output}`));
           return;
         }
+
+        if (exitCode !== 0) {
+          logger.info('bash 명령어 실행', { command, exitCode, durationMs, timedOut: false });
+          const output = [
+            stdout ? `stdout:\n${stdout}` : '',
+            stderr ? `stderr:\n${stderr}` : '',
+            `Exit code: ${exitCode}`,
+          ].filter(Boolean).join('\n\n');
+          resolve(makeToolResult(output || `Command failed with exit code ${exitCode}`));
+          return;
+        }
+
+        logger.info('bash 명령어 실행', { command, exitCode: 0, durationMs });
 
         const output = [
           stdout ? stdout : '',
@@ -86,6 +154,13 @@ export const bashTool: Tool = {
         ].filter(Boolean).join('\n');
 
         resolve(makeToolResult(output || '(no output)'));
+      });
+
+      proc.on('error', (err) => {
+        clearTimeout(timer);
+        const durationMs = Date.now() - startTime;
+        logger.info('bash 명령어 실행 실패', { command, durationMs, error: err.message });
+        resolve(makeToolError(`Failed to execute command: ${err.message}`));
       });
     });
   },

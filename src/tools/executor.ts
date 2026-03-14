@@ -3,7 +3,10 @@ import type { ToolRegistry } from './registry.js';
 import type { ToolCall } from '../llm/types.js';
 import { makeToolError } from './tool.js';
 import { renderToolCall, renderToolResult } from '../ui/renderer.js';
+import { startSpinner, stopSpinner, updateSpinner } from '../ui/spinner.js';
+import { setBashOutputCallback } from './bash.js';
 import chalk from 'chalk';
+import { logger } from '../utils/logger.js';
 
 export interface ExecutorOptions {
   permissionCheck?: (tool: Tool, input: Record<string, unknown>) => Promise<boolean>;
@@ -83,19 +86,57 @@ export class ToolExecutor {
       console.log(renderToolCall(toolCall.name, input));
     }
 
-    // Execute
+    // Execute with elapsed time tracking
     let result: ToolResult;
+    const execStart = Date.now();
+    let elapsedTimer: ReturnType<typeof setInterval> | null = null;
+
+    if (this.options.showToolCalls) {
+      // 500ms 후부터 경과 시간 스피너 표시
+      elapsedTimer = setInterval(() => {
+        const elapsed = ((Date.now() - execStart) / 1000).toFixed(1);
+        updateSpinner(`${toolCall.name} (${elapsed}s...)`);
+      }, 200);
+
+      // 스피너 시작 (짧은 작업은 스피너 없이 끝남)
+      startSpinner(`${toolCall.name}...`);
+
+      // bash 도구인 경우 실시간 출력 콜백 설정
+      if (toolCall.name === 'bash') {
+        setBashOutputCallback((_chunk: string) => {
+          // 스피너 텍스트에 출력 중임을 표시
+          const elapsed = ((Date.now() - execStart) / 1000).toFixed(1);
+          updateSpinner(`${toolCall.name} (${elapsed}s...) ▸ 출력 수신 중`);
+        });
+      }
+    }
+
     try {
       result = await tool.execute(input);
     } catch (err) {
       result = makeToolError(
         `Tool '${toolCall.name}' threw an error: ${err instanceof Error ? err.message : String(err)}`
       );
+    } finally {
+      if (elapsedTimer) {
+        clearInterval(elapsedTimer);
+      }
+      if (toolCall.name === 'bash') {
+        setBashOutputCallback(null);
+      }
+      stopSpinner();
     }
 
-    // Display result
+    const execDuration = Date.now() - execStart;
+    logger.debug('도구 실행 완료', {
+      tool: toolCall.name,
+      durationMs: execDuration,
+      success: result.success,
+    });
+
+    // Display result with elapsed time
     if (this.options.showToolCalls) {
-      console.log(renderToolResult(toolCall.name, result.output, !result.success));
+      console.log(renderToolResult(toolCall.name, result.output, !result.success, execDuration));
     }
 
     // Post-hook

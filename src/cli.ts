@@ -22,6 +22,7 @@ import { mcpManager } from './mcp/mcp-manager.js';
 import { createSubAgentHandler } from './agent/sub-agent.js';
 import { setSubAgentHandler } from './tools/sub-agent-tool.js';
 import { stopSpinner } from './ui/spinner.js';
+import { logger } from './utils/logger.js';
 import {
   createBuiltinCommands,
   loadCustomCommands,
@@ -44,6 +45,7 @@ import { notebookEditTool } from './tools/notebook-edit.js';
 import { subAgentTool } from './tools/sub-agent-tool.js';
 import { taskCreateTool, taskUpdateTool, taskListTool, taskGetTool } from './tools/task-tools.js';
 import { askUserTool } from './tools/ask-user.js';
+import { updateMemoryTool } from './tools/memory-tool.js';
 
 // Import providers
 import { AnthropicProvider } from './llm/anthropic.js';
@@ -243,6 +245,7 @@ async function main(): Promise<void> {
     taskListTool,
     taskGetTool,
     askUserTool,
+    updateMemoryTool,
   ]);
 
   // Setup sub-agent handler
@@ -306,6 +309,7 @@ async function main(): Promise<void> {
   }
 
   // Run hooks - session start
+  logger.info('세션 시작', { provider: providerName, model: modelName, cwd: process.cwd(), planMode: getMode() === 'plan', yolo: !!args.yolo });
   await hookManager.runHooks('SessionStart', { cwd: process.cwd() });
 
   // Single prompt mode
@@ -320,6 +324,7 @@ async function main(): Promise<void> {
       postHook: async (toolName, input, result) => { await hookManager.runHooks('PostToolUse', { tool: toolName, args: input, result }); },
       planMode: getMode() === 'plan',
     });
+    logger.info('세션 종료 (single prompt)');
     await hookManager.runHooks('SessionEnd', {});
     await mcpManager.disconnectAll();
     process.exit(0);
@@ -402,8 +407,10 @@ async function main(): Promise<void> {
 
     onExit: async () => {
       stopSpinner();
+      logger.info('세션 종료 (REPL exit)');
       console.log(chalk.dim('\nSaving session...'));
       sessionManager.save(conversation, undefined, provider.model);
+      checkpointManager.cleanup();
       await hookManager.runHooks('SessionEnd', {});
       await mcpManager.disconnectAll();
     },
@@ -412,6 +419,7 @@ async function main(): Promise<void> {
   // SIGTERM (Docker, etc.)
   process.on('SIGTERM', async () => {
     stopSpinner();
+    logger.info('세션 종료 (SIGTERM)');
     sessionManager.save(conversation, undefined, provider.model);
     await hookManager.runHooks('SessionEnd', {});
     await mcpManager.disconnectAll();
@@ -422,6 +430,7 @@ async function main(): Promise<void> {
 }
 
 main().catch((err) => {
+  logger.error('치명적 오류', {}, err instanceof Error ? err : new Error(String(err)));
   console.error(chalk.red(`Fatal error: ${err.message}`));
   console.error(err.stack);
   process.exit(1);

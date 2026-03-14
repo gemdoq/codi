@@ -137,12 +137,13 @@ describe('Conversation', () => {
     expect(restored.getMessages()).toEqual(conv.getMessages());
   });
 
-  it('estimateTokens returns rough token count', () => {
-    conv.setSystemPrompt('a'.repeat(100)); // 100 chars => ~25 tokens
-    conv.addUserMessage('b'.repeat(200)); // 200 chars => ~50 tokens
+  it('estimateTokens returns token count using tiktoken', () => {
+    conv.setSystemPrompt('Hello world');
+    conv.addUserMessage('This is a test message');
     const tokens = conv.estimateTokens();
-    // (100 + 200) / 4 = 75
-    expect(tokens).toBe(75);
+    // tiktoken 기반이므로 정확한 토큰 수는 다를 수 있으나, 0보다 큰 합리적인 값이어야 한다
+    expect(tokens).toBeGreaterThan(0);
+    expect(tokens).toBeLessThan(50);
   });
 
   it('handles empty conversation state', () => {

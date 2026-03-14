@@ -2,6 +2,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import type { Tool, ToolResult } from './tool.js';
 import { makeToolResult, makeToolError } from './tool.js';
+import { backupFile } from './file-backup.js';
 
 export const fileEditTool: Tool = {
   name: 'edit_file',
@@ -73,6 +74,9 @@ export const fileEditTool: Tool = {
         const idx = content.indexOf(oldString);
         content = content.slice(0, idx) + newString + content.slice(idx + oldString.length);
       }
+
+      // 쓰기 전에 백업 생성
+      backupFile(resolved);
 
       // Restore original line endings if file used CRLF
       const output = hasCrlf ? content.replace(/\n/g, '\r\n') : content;

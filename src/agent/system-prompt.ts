@@ -71,7 +71,8 @@ const TOOL_HIERARCHY = `# Tool Usage Rules
 - Use grep instead of bash grep/rg for content search
 - Reserve bash for system commands that have no dedicated tool
 - Use sub_agent for complex multi-step exploration tasks
-- Call multiple tools in parallel when they are independent`;
+- Call multiple tools in parallel when they are independent
+- Use update_memory to persist important information (architecture, user preferences, patterns, decisions) across conversations. Proactively save useful context when you discover it.`;
 
 const WINDOWS_RULES = `# Windows Shell Rules
 You are running on Windows. The shell is PowerShell. Follow these rules:

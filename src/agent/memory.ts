@@ -65,7 +65,7 @@ export class MemoryManager {
 
     const lines = [
       `You have a persistent memory directory at ${this.memoryDir}.`,
-      'Use write_file/edit_file to update memory files as you learn patterns.',
+      'Use the update_memory tool to save, delete, or list memory topics as you learn patterns.',
       '',
       'Current MEMORY.md:',
       index,

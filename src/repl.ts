@@ -1,6 +1,7 @@
 import * as readline from 'node:readline/promises';
 import { stdin as input, stdout as output } from 'process';
 import * as os from 'os';
+import * as fs from 'fs';
 import chalk from 'chalk';
 import { execSync } from 'child_process';
 import { edit } from 'external-editor';
@@ -14,6 +15,10 @@ import * as path from 'path';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
+
+const HISTORY_DIR = path.join(os.homedir(), '.codi');
+const HISTORY_FILE = path.join(HISTORY_DIR, 'history');
+const MAX_HISTORY = 1000;
 
 function getVersion(): string {
   try {
@@ -59,8 +64,41 @@ export class Repl {
     });
   }
 
+  private loadHistory(): string[] {
+    try {
+      const content = fs.readFileSync(HISTORY_FILE, 'utf-8');
+      return content.split('\n').filter(Boolean).slice(-MAX_HISTORY);
+    } catch {
+      // 파일이 없거나 읽기 실패 시 빈 히스토리
+      return [];
+    }
+  }
+
+  private saveHistory(): void {
+    if (!this.rl) return;
+    try {
+      // readline.history는 최신순(역순)이므로 reverse하여 시간순으로 저장
+      const rlAny = this.rl as any;
+      const history: string[] = rlAny.history ?? [];
+      const entries = history.slice(0, MAX_HISTORY).reverse();
+      fs.mkdirSync(HISTORY_DIR, { recursive: true });
+      fs.writeFileSync(HISTORY_FILE, entries.join('\n') + '\n', 'utf-8');
+    } catch {
+      // 히스토리 저장 실패는 무시
+    }
+  }
+
+  private shouldSaveToHistory(line: string): boolean {
+    const trimmed = line.trim();
+    if (!trimmed) return false;
+    if (trimmed.startsWith('/')) return false;
+    return true;
+  }
+
   async start(): Promise<void> {
     this.running = true;
+
+    const loadedHistory = this.loadHistory();
 
     this.rl = readline.createInterface({
       input,
@@ -68,7 +106,19 @@ export class Repl {
       prompt: renderPrompt(),
       completer: (line: string) => completer(line),
       terminal: true,
-    });
+      history: loadedHistory,
+      historySize: MAX_HISTORY,
+    } as any);
+
+    // readline/promises에서 history 옵션이 무시될 수 있으므로 직접 설정
+    const rlAny = this.rl as any;
+    if (rlAny.history && loadedHistory.length > 0) {
+      // history 배열은 최신순(역순)으로 저장됨
+      rlAny.history.length = 0;
+      for (let i = loadedHistory.length - 1; i >= 0; i--) {
+        rlAny.history.push(loadedHistory[i]);
+      }
+    }
 
     // Setup bracket paste mode detection (skip on Windows — breaks Ctrl+V paste)
     if (process.stdin.isTTY && os.platform() !== 'win32') {
@@ -146,6 +196,20 @@ export class Repl {
 
         const trimmed = line.trim();
         if (!trimmed) continue;
+
+        // 히스토리 필터링: 슬래시 커맨드/빈 줄 제거 + 연속 중복 제거
+        {
+          const rlAny = this.rl as any;
+          const hist: string[] | undefined = rlAny.history;
+          if (hist && hist.length > 0) {
+            // readline은 입력을 history[0]에 자동 추가함
+            if (!this.shouldSaveToHistory(trimmed)) {
+              hist.shift(); // 저장하면 안 되는 항목 제거
+            } else if (hist.length > 1 && hist[0] === hist[1]) {
+              hist.shift(); // 연속 중복 제거
+            }
+          }
+        }
 
         // Multiline: line ending with \
         if (trimmed.endsWith('\\')) {
@@ -288,6 +352,7 @@ export class Repl {
   }
 
   async gracefulExit(): Promise<void> {
+    this.saveHistory();
     this.stop();
     if (this.options.onExit) {
       await this.options.onExit();

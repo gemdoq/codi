@@ -5,6 +5,7 @@ export interface CompressorOptions {
   threshold: number; // 0-1, fraction of context window to trigger
   maxContextTokens: number; // Model's context window size
   keepRecentMessages: number; // Number of recent messages to preserve
+  model?: string; // 토큰 카운팅에 사용할 모델명
 }
 
 const DEFAULT_OPTIONS: CompressorOptions = {
@@ -21,7 +22,7 @@ export class ContextCompressor {
   }
 
   shouldCompress(conversation: Conversation): boolean {
-    const estimatedTokens = conversation.estimateTokens();
+    const estimatedTokens = conversation.estimateTokens(this.options.model);
     return estimatedTokens > this.options.maxContextTokens * this.options.threshold;
   }
 

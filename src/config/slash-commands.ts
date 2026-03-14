@@ -107,7 +107,37 @@ export function createBuiltinCommands(): SlashCommand[] {
       name: '/cost',
       description: 'Show token usage and cost',
       handler: async () => {
-        console.log(chalk.cyan(`\n${tokenTracker.format()}\n`));
+        const session = tokenTracker.getSessionStats();
+        const total = tokenTracker.getStats();
+
+        console.log(chalk.bold('\nToken Usage & Cost:\n'));
+
+        // Session stats
+        console.log(chalk.cyan('  [Current Session]'));
+        console.log(`    Requests:    ${session.requests}`);
+        console.log(`    Input:       ${formatTokens(session.inputTokens)}`);
+        console.log(`    Output:      ${formatTokens(session.outputTokens)}`);
+        console.log(`    Total:       ${formatTokens(session.totalTokens)}`);
+        console.log(`    Cost:        $${session.cost.toFixed(4)}`);
+        if (session.requests > 0) {
+          console.log(`    Avg/Request: $${session.avgCostPerRequest.toFixed(4)}`);
+        }
+        if (session.lastRequestCost) {
+          console.log(chalk.dim(`    Last Request: $${session.lastRequestCost.cost.toFixed(4)} (${formatTokens(session.lastRequestCost.inputTokens)} in / ${formatTokens(session.lastRequestCost.outputTokens)} out)`));
+        }
+
+        // Total stats (only show if different from session)
+        if (total.requests !== session.requests) {
+          console.log('');
+          console.log(chalk.cyan('  [Total Accumulated]'));
+          console.log(`    Requests:    ${total.requests}`);
+          console.log(`    Input:       ${formatTokens(total.inputTokens)}`);
+          console.log(`    Output:      ${formatTokens(total.outputTokens)}`);
+          console.log(`    Total:       ${formatTokens(total.totalTokens)}`);
+          console.log(`    Cost:        $${total.cost.toFixed(4)}`);
+        }
+
+        console.log('');
         return true;
       },
     },
@@ -386,13 +416,64 @@ export function createBuiltinCommands(): SlashCommand[] {
         try {
           const staged = execSync('git diff --cached', { encoding: 'utf-8', cwd: process.cwd() });
           const unstaged = execSync('git diff', { encoding: 'utf-8', cwd: process.cwd() });
-          const diff = staged + unstaged;
-          if (!diff.trim()) {
+
+          // 스테이징된 변경이 없으면 수정된 파일 자동 스테이징
+          if (!staged.trim() && unstaged.trim()) {
+            // 추적되지 않는 파일 확인
+            const untracked = execSync('git ls-files --others --exclude-standard', {
+              encoding: 'utf-8',
+              cwd: process.cwd(),
+            }).trim();
+
+            if (untracked) {
+              console.log(chalk.yellow(`\n주의: 추적되지 않는 파일이 있습니다 (자동 스테이징 안 됨):`));
+              for (const f of untracked.split('\n').slice(0, 10)) {
+                console.log(chalk.dim(`  ${f}`));
+              }
+              if (untracked.split('\n').length > 10) {
+                console.log(chalk.dim(`  ... 외 ${untracked.split('\n').length - 10}개`));
+              }
+              console.log('');
+            }
+
+            // 수정된 파일만 자동 스테이징 (추적되지 않는 파일 제외)
+            console.log(chalk.dim('수정된 파일을 자동 스테이징합니다...'));
+            execSync('git add -u', { encoding: 'utf-8', cwd: process.cwd() });
+          }
+
+          // 스테이징 후 최종 diff 확인
+          const finalDiff = execSync('git diff --cached', { encoding: 'utf-8', cwd: process.cwd() });
+          if (!finalDiff.trim()) {
             console.log(chalk.dim('\nNo changes to commit.\n'));
             return true;
           }
+
+          // 최근 커밋 로그를 분석하여 컨벤션 감지
+          let conventionHint = '';
+          try {
+            const recentLog = execSync('git log --oneline -10', {
+              encoding: 'utf-8',
+              cwd: process.cwd(),
+            }).trim();
+
+            if (recentLog) {
+              // Conventional Commits 패턴 감지 (feat:, fix:, chore: 등)
+              const conventionalPattern = /^[a-f0-9]+\s+(feat|fix|chore|docs|style|refactor|perf|test|build|ci|revert)(\(.+\))?[!]?:/;
+              const lines = recentLog.split('\n');
+              const conventionalCount = lines.filter((l) => conventionalPattern.test(l)).length;
+
+              if (conventionalCount >= 3) {
+                conventionHint = `\n\n이 프로젝트는 Conventional Commits 형식을 사용합니다 (예: feat:, fix:, chore: 등). 같은 형식을 따라주세요.`;
+              }
+
+              conventionHint += `\n\n최근 커밋 참고:\n\`\`\`\n${recentLog}\n\`\`\``;
+            }
+          } catch {
+            // 커밋 로그 조회 실패 무시
+          }
+
           ctx.conversation.addUserMessage(
-            `다음 git diff를 분석해서 적절한 커밋 메시지를 생성하고, git 도구로 변경된 파일을 add하고 커밋해줘.\n\n\`\`\`diff\n${diff}\n\`\`\``
+            `다음 git diff를 분석해서 적절한 커밋 메시지를 생성하고, git 도구로 커밋해줘. 이미 스테이징 완료되었으므로 add 없이 commit만 하면 됩니다.${conventionHint}\n\n\`\`\`diff\n${finalDiff}\n\`\`\``
           );
           return false;
         } catch {
@@ -501,6 +582,209 @@ export function createBuiltinCommands(): SlashCommand[] {
       },
     },
     {
+      name: '/undo',
+      description: 'Undo the most recent file edit (rollback from backup)',
+      handler: async (args) => {
+        const { getBackupHistory, undoLast } = await import('../tools/file-backup.js');
+
+        if (args === 'list') {
+          const history = getBackupHistory();
+          if (history.length === 0) {
+            console.log(chalk.dim('\n되돌릴 파일 변경 이력이 없습니다.\n'));
+            return true;
+          }
+          console.log(chalk.bold(`\n파일 변경 이력 (최근 ${Math.min(history.length, 20)}개):\n`));
+          const recent = history.slice(-20).reverse();
+          for (let i = 0; i < recent.length; i++) {
+            const entry = recent[i]!;
+            const time = new Date(entry.timestamp).toLocaleTimeString();
+            const tag = entry.wasNew ? chalk.yellow('[새 파일]') : chalk.cyan('[수정]');
+            console.log(`  ${i + 1}. ${tag} ${entry.originalPath} ${chalk.dim(time)}`);
+          }
+          console.log('');
+          return true;
+        }
+
+        const entry = undoLast();
+        if (!entry) {
+          console.log(chalk.yellow('\n되돌릴 변경 사항이 없습니다.\n'));
+          return true;
+        }
+
+        const action = entry.wasNew ? '삭제됨 (새로 생성된 파일)' : '이전 상태로 복원됨';
+        console.log(chalk.green(`\n✓ 되돌리기 완료: ${entry.originalPath}`));
+        console.log(chalk.dim(`  ${action}`));
+        console.log('');
+        return true;
+      },
+    },
+    {
+      name: '/branch',
+      description: 'Create and switch to a new branch, or show current branch',
+      handler: async (args) => {
+        const { execSync } = await import('child_process');
+        try {
+          if (!args) {
+            // 이름 없으면 현재 브랜치 및 전체 목록 표시
+            const current = execSync('git branch --show-current', {
+              encoding: 'utf-8',
+              cwd: process.cwd(),
+            }).trim();
+            const branches = execSync('git branch -a', {
+              encoding: 'utf-8',
+              cwd: process.cwd(),
+            }).trim();
+            console.log(chalk.bold(`\nCurrent branch: ${chalk.green(current || '(detached HEAD)')}\n`));
+            console.log(branches);
+            console.log('');
+          } else {
+            const name = args.trim();
+            execSync(`git checkout -b ${name}`, {
+              encoding: 'utf-8',
+              cwd: process.cwd(),
+            });
+            console.log(chalk.green(`\n✓ Created and switched to branch: ${name}\n`));
+          }
+        } catch (err: unknown) {
+          const error = err as { stderr?: string; message?: string };
+          const msg = error.stderr || error.message || 'Unknown error';
+          console.log(chalk.red(`\nBranch operation failed: ${msg.trim()}\n`));
+        }
+        return true;
+      },
+    },
+    {
+      name: '/stash',
+      description: 'Git stash management (pop, list, drop, or save)',
+      handler: async (args) => {
+        const { execSync } = await import('child_process');
+        const sub = args.trim().split(/\s+/);
+        const action = sub[0] || 'push';
+
+        const allowed = ['push', 'pop', 'list', 'drop', 'show', 'apply', 'clear'];
+        if (!allowed.includes(action)) {
+          console.log(chalk.yellow(`Usage: /stash [${allowed.join('|')}]`));
+          return true;
+        }
+
+        try {
+          // stash clear는 위험하므로 경고
+          if (action === 'clear') {
+            console.log(chalk.yellow('⚠ This will drop all stashes permanently.'));
+          }
+
+          const cmd = `git stash ${args.trim() || 'push'}`;
+          const output = execSync(cmd, {
+            encoding: 'utf-8',
+            cwd: process.cwd(),
+          });
+          console.log(output.trim() ? `\n${output.trim()}\n` : chalk.dim('\n(no output)\n'));
+        } catch (err: unknown) {
+          const error = err as { stderr?: string; stdout?: string; message?: string };
+          const msg = error.stderr || error.stdout || error.message || 'Unknown error';
+          console.log(chalk.red(`\nStash operation failed: ${msg.trim()}\n`));
+        }
+        return true;
+      },
+    },
+    {
+      name: '/pr',
+      description: 'Generate a pull request description from current branch diff',
+      handler: async (_args, ctx) => {
+        const { execSync } = await import('child_process');
+        try {
+          // 현재 브랜치 확인
+          const currentBranch = execSync('git branch --show-current', {
+            encoding: 'utf-8',
+            cwd: process.cwd(),
+          }).trim();
+
+          if (!currentBranch) {
+            console.log(chalk.yellow('Not on a branch (detached HEAD).'));
+            return true;
+          }
+
+          // 기본 브랜치 탐색 (main 또는 master)
+          let baseBranch = 'main';
+          try {
+            execSync('git rev-parse --verify main', {
+              encoding: 'utf-8',
+              cwd: process.cwd(),
+              stdio: 'pipe',
+            });
+          } catch {
+            try {
+              execSync('git rev-parse --verify master', {
+                encoding: 'utf-8',
+                cwd: process.cwd(),
+                stdio: 'pipe',
+              });
+              baseBranch = 'master';
+            } catch {
+              console.log(chalk.yellow('Cannot find base branch (main or master).'));
+              return true;
+            }
+          }
+
+          if (currentBranch === baseBranch) {
+            console.log(chalk.yellow(`Already on ${baseBranch}. Switch to a feature branch first.`));
+            return true;
+          }
+
+          // 커밋 로그와 diff 수집
+          let commitLog = '';
+          try {
+            commitLog = execSync(`git log ${baseBranch}..HEAD --oneline`, {
+              encoding: 'utf-8',
+              cwd: process.cwd(),
+            }).trim();
+          } catch {
+            // merge-base가 없는 경우
+          }
+
+          if (!commitLog) {
+            console.log(chalk.yellow(`No commits ahead of ${baseBranch}.`));
+            return true;
+          }
+
+          let diffStat = '';
+          try {
+            diffStat = execSync(`git diff ${baseBranch}...HEAD --stat`, {
+              encoding: 'utf-8',
+              cwd: process.cwd(),
+            }).trim();
+          } catch {
+            // diff stat 실패 무시
+          }
+
+          let diff = '';
+          try {
+            diff = execSync(`git diff ${baseBranch}...HEAD`, {
+              encoding: 'utf-8',
+              cwd: process.cwd(),
+              maxBuffer: 10 * 1024 * 1024,
+            });
+            // diff가 너무 크면 잘라내기
+            if (diff.length > 50_000) {
+              diff = diff.slice(0, 50_000) + '\n\n... (diff truncated, too large)';
+            }
+          } catch {
+            // diff 실패 무시
+          }
+
+          console.log(chalk.dim(`\nAnalyzing ${commitLog.split('\n').length} commit(s) from ${currentBranch}...\n`));
+
+          ctx.conversation.addUserMessage(
+            `현재 브랜치 \`${currentBranch}\`에서 \`${baseBranch}\`로 보낼 Pull Request 설명을 생성해줘.\n\n다음 형식의 마크다운으로 출력해줘:\n- **Title**: PR 제목 (70자 이내, 영문)\n- **## Summary**: 변경 사항 요약 (1-3 bullet points)\n- **## Changes**: 주요 변경 파일 및 내용\n- **## Test Plan**: 테스트 계획 체크리스트\n\n### Commits:\n\`\`\`\n${commitLog}\n\`\`\`\n\n### Diff stat:\n\`\`\`\n${diffStat}\n\`\`\`\n\n### Full diff:\n\`\`\`diff\n${diff}\n\`\`\``
+          );
+          return false;
+        } catch {
+          console.log(chalk.yellow('Not a git repository or git not available.'));
+          return true;
+        }
+      },
+    },
+    {
       name: '/mcp',
       description: 'Show MCP server status',
       handler: async () => {
@@ -523,6 +807,12 @@ export function createBuiltinCommands(): SlashCommand[] {
       },
     },
   ];
+}
+
+function formatTokens(n: number): string {
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
+  if (n >= 1_000) return `${(n / 1_000).toFixed(1)}K`;
+  return String(n);
 }
 
 // Custom slash commands from .codi/commands/

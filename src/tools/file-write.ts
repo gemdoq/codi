@@ -2,6 +2,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import type { Tool, ToolResult } from './tool.js';
 import { makeToolResult, makeToolError } from './tool.js';
+import { backupFile } from './file-backup.js';
 
 export const fileWriteTool: Tool = {
   name: 'write_file',
@@ -29,6 +30,10 @@ export const fileWriteTool: Tool = {
       }
 
       const existed = fs.existsSync(resolved);
+
+      // 쓰기 전에 백업 생성 (새 파일이면 "파일 없음" 마커)
+      backupFile(resolved);
+
       fs.writeFileSync(resolved, content, 'utf-8');
 
       const lines = content.split('\n').length;
