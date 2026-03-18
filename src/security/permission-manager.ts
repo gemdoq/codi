@@ -1,8 +1,8 @@
-import * as readline from 'node:readline/promises';
 import chalk from 'chalk';
 import type { Tool } from '../tools/tool.js';
 import { evaluatePermission } from '../config/permissions.js';
 import { configManager } from '../config/config.js';
+import { sharedPrompt } from '../ui/stdin-prompt.js';
 
 export type PermissionMode = 'default' | 'acceptEdits' | 'plan' | 'yolo';
 
@@ -71,16 +71,10 @@ async function promptUser(tool: Tool, input: Record<string, unknown>): Promise<b
   }
   console.log('');
 
-  const rl = readline.createInterface({
-    input: process.stdin,
-    output: process.stdout,
-  });
-
   try {
-    const answer = await rl.question(
+    const answer = await sharedPrompt(
       chalk.yellow(`Allow? [${chalk.bold('Y')}es / ${chalk.bold('n')}o / ${chalk.bold('a')}lways for this tool] `)
     );
-    rl.close();
 
     const choice = answer.trim().toLowerCase();
 
@@ -96,7 +90,6 @@ async function promptUser(tool: Tool, input: Record<string, unknown>): Promise<b
     // Default to yes
     return true;
   } catch {
-    rl.close();
     return false;
   }
 }

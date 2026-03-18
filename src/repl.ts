@@ -12,6 +12,7 @@ import { completer } from './ui/completer.js';
 import { readFileSync } from 'fs';
 import { fileURLToPath } from 'url';
 import * as path from 'path';
+import { registerPromptHandler, unregisterPromptHandler } from './ui/stdin-prompt.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -149,6 +150,12 @@ export class Repl {
         }
       });
     }
+
+    // 공유 프롬프트 핸들러 등록 (permission-manager, ask-user가 이것을 사용)
+    registerPromptHandler(async (prompt: string) => {
+      if (!this.rl) throw new Error('REPL not running');
+      return this.rl.question(prompt);
+    });
 
     this.printWelcome();
 
@@ -345,6 +352,7 @@ export class Repl {
 
   stop(): void {
     this.running = false;
+    unregisterPromptHandler();
     if (this.rl) {
       this.rl.close();
       this.rl = null;

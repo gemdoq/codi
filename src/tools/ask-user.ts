@@ -1,7 +1,7 @@
-import * as readline from 'node:readline/promises';
 import chalk from 'chalk';
 import type { Tool, ToolResult } from './tool.js';
 import { makeToolResult, makeToolError } from './tool.js';
+import { sharedPrompt } from '../ui/stdin-prompt.js';
 
 export const askUserTool: Tool = {
   name: 'ask_user',
@@ -46,18 +46,12 @@ export const askUserTool: Tool = {
       console.log(chalk.dim(`  ${options.length + 1}. Other (type custom response)`));
       console.log('');
 
-      const rl = readline.createInterface({
-        input: process.stdin,
-        output: process.stdout,
-      });
-
       try {
         const prompt = multiSelect
           ? chalk.dim('Enter numbers separated by commas: ')
           : chalk.dim('Enter number or type response: ');
 
-        const answer = await rl.question(prompt);
-        rl.close();
+        const answer = await sharedPrompt(prompt);
 
         if (multiSelect) {
           const indices = answer.split(',').map((s) => parseInt(s.trim()) - 1);
@@ -78,23 +72,15 @@ export const askUserTool: Tool = {
 
         return makeToolResult(`User response: ${answer}`);
       } catch {
-        rl.close();
         return makeToolError('Failed to get user input');
       }
     }
 
     // Free-form question
-    const rl = readline.createInterface({
-      input: process.stdin,
-      output: process.stdout,
-    });
-
     try {
-      const answer = await rl.question(chalk.dim('> '));
-      rl.close();
+      const answer = await sharedPrompt(chalk.dim('> '));
       return makeToolResult(`User response: ${answer}`);
     } catch {
-      rl.close();
       return makeToolError('Failed to get user input');
     }
   },
