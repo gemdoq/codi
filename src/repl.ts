@@ -152,9 +152,15 @@ export class Repl {
     }
 
     // 공유 프롬프트 핸들러 등록 (permission-manager, ask-user가 이것을 사용)
-    registerPromptHandler(async (prompt: string) => {
-      if (!this.rl) throw new Error('REPL not running');
-      return this.rl.question(prompt);
+    // rl.question() 대신 직접 line 이벤트를 사용하여 중복 에코 방지
+    registerPromptHandler((prompt: string) => {
+      if (!this.rl) return Promise.reject(new Error('REPL not running'));
+      process.stdout.write(prompt);
+      return new Promise<string>((resolve) => {
+        this.rl!.once('line', (answer: string) => {
+          resolve(answer);
+        });
+      });
     });
 
     this.printWelcome();
