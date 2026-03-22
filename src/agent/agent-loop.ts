@@ -35,7 +35,7 @@ export async function agentLoop(
   const {
     provider,
     registry,
-    maxIterations = 25,
+    maxIterations = 50,
     stream = true,
     showOutput = true,
   } = options;

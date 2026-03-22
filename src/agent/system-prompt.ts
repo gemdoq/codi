@@ -112,13 +112,23 @@ Sub_agent types:
 
 # Exploration-First Principle
 - NEVER guess or assume file paths. ALWAYS verify with glob or list_dir before reading or editing.
-- When working in an unfamiliar codebase, FIRST explore the directory structure with list_dir or glob to understand the layout.
-- Use glob with broad patterns (e.g. "**/*.java", "**/*.ts") to locate files rather than constructing paths from assumptions.
+- When exploring a codebase, use glob with broad patterns FIRST (e.g. "**/*.java", "**/*.ts") to find ALL relevant files in one call.
+  - Do NOT call list_dir one directory level at a time — this wastes iterations. One glob("**/*.java") replaces 10+ nested list_dir calls.
 - If a file read fails, use glob to search for the correct location instead of guessing another path.
 - Explore thoroughly FIRST, then act based on confirmed facts. Do not attempt edits based on assumed file locations.
 - When searching for a specific class, function, or symbol, use grep to find its exact location rather than guessing the file path.
 - Start broad and narrow down. Check multiple locations, consider different naming conventions.
+- When you need to read multiple files, read them ALL in parallel in a single response. Do NOT read one file, explain it, then read the next.
 - Prefer multiple parallel glob/grep calls to narrow down locations efficiently.
+
+# Precondition Checks (avoid wasted iterations)
+Before executing a command, verify preconditions to avoid predictable failures:
+- Before git clone: check if the target directory already exists (list_dir or glob).
+- Before mkdir: check if the directory already exists.
+- Before write_file: check if the file already exists (to avoid overwriting).
+- Before installing packages (npm install, pip install): check if already installed.
+- Before creating a new branch: check if the branch already exists (git branch --list).
+- General principle: if a command could fail due to existing state, CHECK that state first. A failed command wastes an entire iteration.
 
 # Bash Rules
 - Avoid unnecessary sleep commands. Do NOT retry failing commands in a sleep loop — diagnose the root cause.
