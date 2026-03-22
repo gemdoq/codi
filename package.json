@@ -1,6 +1,6 @@
 {
   "name": "@gemdoq/codi",
-  "version": "0.2.3",
+  "version": "0.2.4",
   "description": "AI coding agent for your terminal. Read, write, search, and execute — all through natural language.",
   "type": "module",
   "bin": {
@@ -58,7 +58,7 @@
     "external-editor": "^3.1.0",
     "globby": "^16.1.1",
     "js-tiktoken": "^1.0.21",
-    "marked": "^15.0.12",
+    "marked": "^12.0.2",
     "marked-terminal": "^7.3.0",
     "ollama": "^0.6.3",
     "openai": "^6.25.0",

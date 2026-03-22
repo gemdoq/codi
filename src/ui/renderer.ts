@@ -4,7 +4,7 @@ import TerminalRenderer from 'marked-terminal';
 import { highlight } from 'cli-highlight';
 import { createTwoFilesPatch } from 'diff';
 
-// marked-terminal exports a constructor that creates a marked renderer
+// marked-terminal을 사용하여 CLI에서 마크다운을 보기 좋게 렌더링
 const renderer = new (TerminalRenderer as any)({
   codespan: chalk.cyan,
   strong: chalk.bold,
@@ -18,6 +18,9 @@ const renderer = new (TerminalRenderer as any)({
   emoji: false,
   width: process.stdout.columns || 100,
   tab: 2,
+  // 제목에서 # 기호를 제거하고 깔끔하게 표시
+  showSectionPrefix: false,
+  reflowText: true,
 });
 
 marked.setOptions({ renderer });
