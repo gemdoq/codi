@@ -200,25 +200,20 @@ async function callLlmWithRetry(
           ? {
               onToken: (text) => {
                 stopSpinner();
-                if (showOutput && !streamedText) {
-                  process.stdout.write('\n' + renderAssistantPrefix() + '\n');
-                }
                 streamedText += text;
-                if (showOutput) {
-                  process.stdout.write(text);
-                }
                 options.onToken?.(text);
               },
             }
           : undefined,
       });
 
-      // If we streamed text, add newline and mark as already displayed
+      // If we streamed text, render with markdown formatting
       if (streamedText) {
         if (showOutput) {
-          process.stdout.write('\n');
+          process.stdout.write('\n' + renderAssistantPrefix() + '\n');
+          console.log(renderMarkdown(streamedText));
         }
-        // Text was already displayed during streaming — do not render again
+        // Text was already displayed — do not render again
         return { ...response, _streamed: true } as any;
       }
 
