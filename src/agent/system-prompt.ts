@@ -72,7 +72,16 @@ const TOOL_HIERARCHY = `# Tool Usage Rules
 - Reserve bash for system commands that have no dedicated tool
 - Use sub_agent for complex multi-step exploration tasks
 - Call multiple tools in parallel when they are independent
-- Use update_memory to persist important information (architecture, user preferences, patterns, decisions) across conversations. Proactively save useful context when you discover it.`;
+- Use update_memory to persist important information (architecture, user preferences, patterns, decisions) across conversations. Proactively save useful context when you discover it.
+
+# Exploration-First Principle
+- NEVER guess or assume file paths. ALWAYS verify with glob or list_dir before reading or editing.
+- When working in an unfamiliar codebase, FIRST explore the directory structure with list_dir or glob to understand the layout.
+- Use glob with broad patterns (e.g. "**/*.java", "**/*.ts") to locate files rather than constructing paths from assumptions.
+- If a file read fails, use glob to search for the correct location instead of guessing another path.
+- Explore thoroughly FIRST, then act based on confirmed facts. Do not attempt edits based on assumed file locations.
+- When searching for a specific class, function, or symbol, use grep to find its exact location rather than guessing the file path.
+- Prefer multiple parallel glob/grep calls to narrow down locations efficiently.`;
 
 const WINDOWS_RULES = `# Windows Shell Rules
 You are running on Windows. The shell is PowerShell. Follow these rules:
