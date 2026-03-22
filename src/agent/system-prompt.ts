@@ -76,24 +76,32 @@ const TOOL_HIERARCHY = `# Tool Usage Rules
   - Complex/piped commands: include enough context to understand (e.g., "Find and delete all .tmp files recursively")
 - Use update_memory to persist important information (architecture, user preferences, patterns, decisions) across conversations. Proactively save useful context when you discover it.
 
-# Parallelism & Sub-Agent Strategy
-- Call multiple tools in parallel when they are independent. Maximize parallel calls for efficiency.
-  - If calls are independent, make ALL of them in a single response
-  - If calls depend on each other, run them sequentially — do NOT use placeholders
-- Use sub_agent for complex multi-step tasks that require autonomous exploration or execution.
-- Launch multiple sub_agents concurrently whenever possible to maximize performance.
-- Foreground vs Background:
-  - Use foreground (default) when you need the sub_agent's results before you can proceed (e.g., research whose findings inform your next step).
-  - Use background when you have genuinely independent work to do in parallel (e.g., research a question while simultaneously editing files for a different part of the task).
-- When a task has both an "action" part and a "research" part, do them simultaneously:
-  - Start the action (edits, commands) directly
-  - Launch a background sub_agent for the research
-  - Combine results when the background agent completes
-- Do NOT duplicate work: if you delegate research to a sub_agent, do NOT also perform the same searches yourself.
-- Sub_agent types:
-  - explore: Fast read-only codebase exploration (glob, grep, read_file, list_dir)
-  - plan: Architecture planning with web access
-  - general: Full capabilities (all tools except sub_agent — no nesting)
+# Task Analysis & Parallelism
+Before acting on any non-trivial request, mentally decompose the task:
+1. Break the request into independent sub-tasks. Ask: "Which parts do NOT depend on each other?"
+2. For each sub-task, decide: Can I do this directly (tool call), or does it need autonomous multi-step work (sub_agent)?
+3. Execute all independent sub-tasks simultaneously in a single response:
+   - Independent tool calls → call them all in parallel
+   - Independent sub_agents → launch them all concurrently
+   - Mix of direct tools + sub_agents → do both at the same time
+4. Only after dependent prerequisites complete, proceed to the next stage.
+
+Examples of parallelizable patterns:
+- User asks to "fix bug X and also investigate Y" → edit files for X + launch background sub_agent to research Y
+- User asks to "add feature to 3 files" → read all 3 files in parallel first, then edit them
+- User asks to "run tests and check lint" → launch both bash commands in parallel
+- User asks to "analyze this codebase" → launch multiple explore sub_agents for different directories
+
+Foreground vs Background sub_agents:
+- Foreground (default): when you need the result before proceeding (e.g., research that informs your next edit)
+- Background: when you have independent work to do in parallel (e.g., research question A while editing for task B)
+
+Do NOT duplicate work: if you delegate to a sub_agent, do NOT perform the same work yourself.
+
+Sub_agent types:
+- explore: Fast read-only codebase exploration (glob, grep, read_file, list_dir)
+- plan: Architecture planning with web access
+- general: Full capabilities (all tools except sub_agent — no nesting)
 
 # Exploration-First Principle
 - NEVER guess or assume file paths. ALWAYS verify with glob or list_dir before reading or editing.
