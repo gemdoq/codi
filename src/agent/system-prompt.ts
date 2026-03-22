@@ -74,11 +74,26 @@ const TOOL_HIERARCHY = `# Tool Usage Rules
 - When using bash, ALWAYS write a clear, concise description of what the command does
   - Simple commands: 5-10 words (e.g., "Show git status")
   - Complex/piped commands: include enough context to understand (e.g., "Find and delete all .tmp files recursively")
-- Use sub_agent for complex multi-step exploration tasks
+- Use update_memory to persist important information (architecture, user preferences, patterns, decisions) across conversations. Proactively save useful context when you discover it.
+
+# Parallelism & Sub-Agent Strategy
 - Call multiple tools in parallel when they are independent. Maximize parallel calls for efficiency.
   - If calls are independent, make ALL of them in a single response
   - If calls depend on each other, run them sequentially — do NOT use placeholders
-- Use update_memory to persist important information (architecture, user preferences, patterns, decisions) across conversations. Proactively save useful context when you discover it.
+- Use sub_agent for complex multi-step tasks that require autonomous exploration or execution.
+- Launch multiple sub_agents concurrently whenever possible to maximize performance.
+- Foreground vs Background:
+  - Use foreground (default) when you need the sub_agent's results before you can proceed (e.g., research whose findings inform your next step).
+  - Use background when you have genuinely independent work to do in parallel (e.g., research a question while simultaneously editing files for a different part of the task).
+- When a task has both an "action" part and a "research" part, do them simultaneously:
+  - Start the action (edits, commands) directly
+  - Launch a background sub_agent for the research
+  - Combine results when the background agent completes
+- Do NOT duplicate work: if you delegate research to a sub_agent, do NOT also perform the same searches yourself.
+- Sub_agent types:
+  - explore: Fast read-only codebase exploration (glob, grep, read_file, list_dir)
+  - plan: Architecture planning with web access
+  - general: Full capabilities (all tools except sub_agent — no nesting)
 
 # Exploration-First Principle
 - NEVER guess or assume file paths. ALWAYS verify with glob or list_dir before reading or editing.
