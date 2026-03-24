@@ -24,6 +24,7 @@ import { setSubAgentHandler } from './tools/sub-agent-tool.js';
 import { stopSpinner } from './ui/spinner.js';
 import { logger } from './utils/logger.js';
 import { setLocale, detectOsLocale, getLocale, t, type Locale } from './i18n/index.js';
+import { getMissingFields, runRepairWizard } from './config/config-requirements.js';
 import {
   createBuiltinCommands,
   loadCustomCommands,
@@ -182,8 +183,18 @@ async function main(): Promise<void> {
   if (await needsSetup()) {
     const result = await runSetupWizard();
     if (result) {
-      // Reload config after setup
       configManager.reload();
+    }
+  }
+
+  // Check for missing required config fields (e.g., locale added after initial setup)
+  {
+    const missing = getMissingFields(configManager.get());
+    if (missing.length > 0) {
+      const changed = await runRepairWizard(missing);
+      if (changed) {
+        configManager.reload();
+      }
     }
   }
 
