@@ -23,6 +23,7 @@ import { createSubAgentHandler } from './agent/sub-agent.js';
 import { setSubAgentHandler } from './tools/sub-agent-tool.js';
 import { stopSpinner } from './ui/spinner.js';
 import { logger } from './utils/logger.js';
+import { setLocale, detectOsLocale, getLocale, t, type Locale } from './i18n/index.js';
 import {
   createBuiltinCommands,
   loadCustomCommands,
@@ -191,6 +192,13 @@ async function main(): Promise<void> {
   const providerName = args.provider || config.provider;
   const modelName = args.model || config.model;
 
+  // Initialize locale
+  if (config.locale === 'auto') {
+    setLocale(detectOsLocale());
+  } else if (config.locale) {
+    setLocale(config.locale as Locale);
+  }
+
   // Create LLM provider
   let provider: LlmProvider;
   switch (providerName) {
@@ -219,6 +227,37 @@ async function main(): Promise<void> {
       });
       break;
   }
+
+  // Build fallback providers
+  function createProviderFromConfig(pName: string, pModel: string): LlmProvider {
+    switch (pName) {
+      case 'anthropic':
+        return new AnthropicProvider({
+          apiKey: config.apiKeys.anthropic,
+          model: pModel,
+          maxTokens: config.maxTokens,
+          baseUrl: config.baseUrls.anthropic,
+        });
+      case 'ollama':
+        return new OllamaProvider({
+          model: pModel,
+          maxTokens: config.maxTokens,
+          baseUrl: config.baseUrls.ollama,
+        });
+      case 'openai':
+      default:
+        return new OpenAIProvider({
+          apiKey: config.apiKeys.openai || process.env['GEMINI_API_KEY'],
+          model: pModel,
+          maxTokens: config.maxTokens,
+          baseUrl: config.baseUrls.openai,
+        });
+    }
+  }
+
+  const fallbackProviders: LlmProvider[] = config.fallbackModels.map(
+    (fb) => createProviderFromConfig(fb.provider, fb.model)
+  );
 
   // Setup token tracker
   tokenTracker.setModel(modelName);
@@ -277,6 +316,7 @@ async function main(): Promise<void> {
       codiMd: codiMd || undefined,
       memory: memory || undefined,
       planMode: getMode() === 'plan',
+      locale: getLocale(),
     };
     return buildSystemPrompt(context);
   }
@@ -303,7 +343,7 @@ async function main(): Promise<void> {
           if (msg.role === 'user') conversation.addUserMessage(msg.content);
           else if (msg.role === 'assistant') conversation.addAssistantMessage(msg.content);
         }
-        console.log(chalk.dim(`Resumed session: ${id}`));
+        console.log(chalk.dim(`✓ ${t('cmd.resume.done', id, String(data.messages.length))}`));
       }
     }
   }
@@ -311,6 +351,81 @@ async function main(): Promise<void> {
   // Run hooks - session start
   logger.info('세션 시작', { provider: providerName, model: modelName, cwd: process.cwd(), planMode: getMode() === 'plan', yolo: !!args.yolo });
   await hookManager.runHooks('SessionStart', { cwd: process.cwd() });
+
+  // Interactive model selection (Mode B) — when rate limited with no fallback
+  const interactiveModelSelect = async (): Promise<LlmProvider | null> => {
+    const readline = await import('node:readline/promises');
+    const { stdin, stdout } = await import('process');
+
+    console.log(chalk.yellow(`\n${t('agent.selectModel.fetching')}`));
+
+    // Collect available models from all configured providers
+    const providerEntries: Array<{ providerName: string; model: string }> = [];
+
+    const providers: Array<{ name: string; create: () => LlmProvider }> = [];
+    if (config.apiKeys.openai || process.env['GEMINI_API_KEY']) {
+      providers.push({ name: 'openai', create: () => createProviderFromConfig('openai', 'temp') });
+    }
+    if (config.apiKeys.anthropic) {
+      providers.push({ name: 'anthropic', create: () => createProviderFromConfig('anthropic', 'temp') });
+    }
+    // Ollama — always try (local, no key needed)
+    providers.push({ name: 'ollama', create: () => createProviderFromConfig('ollama', 'temp') });
+
+    for (const p of providers) {
+      try {
+        const tmpProvider = p.create();
+        const models = await tmpProvider.listModels();
+        for (const m of models) {
+          providerEntries.push({ providerName: p.name, model: m });
+        }
+      } catch {
+        // Provider not available
+      }
+    }
+
+    if (providerEntries.length === 0) {
+      console.log(chalk.yellow(t('agent.selectModel.noModels')));
+      return null;
+    }
+
+    console.log(chalk.bold(`\n${t('agent.selectModel.available')}\n`));
+    for (let i = 0; i < providerEntries.length; i++) {
+      const e = providerEntries[i]!;
+      console.log(`  ${chalk.cyan(`${i + 1}.`)} ${e.providerName}/${e.model}`);
+    }
+    console.log('');
+
+    const rl = readline.createInterface({ input: stdin, output: stdout });
+    const answer = await rl.question(chalk.cyan(`${t('agent.selectModel.prompt')} `));
+    rl.close();
+
+    const trimmed = answer.trim();
+    if (!trimmed) {
+      console.log(chalk.dim(t('agent.selectModel.cancelled')));
+      return null;
+    }
+
+    const idx = parseInt(trimmed, 10) - 1;
+    if (isNaN(idx) || idx < 0 || idx >= providerEntries.length) {
+      console.log(chalk.yellow(t('agent.selectModel.invalid')));
+      return null;
+    }
+
+    const selected = providerEntries[idx]!;
+    const newProvider = createProviderFromConfig(selected.providerName, selected.model);
+    console.log(chalk.green(`✓ ${t('agent.selectModel.switched', selected.providerName, selected.model)}`));
+    return newProvider;
+  };
+
+  const handleProviderSwitch = (newProvider: LlmProvider) => {
+    provider = newProvider;
+    tokenTracker.setModel(newProvider.model);
+    statusLine.update({ model: newProvider.model, provider: newProvider.name });
+    // Update sub-agent handler with new provider
+    const newSubAgentHandler = createSubAgentHandler(newProvider, registry);
+    setSubAgentHandler(newSubAgentHandler);
+  };
 
   // Single prompt mode
   if (args.prompt) {
@@ -323,6 +438,9 @@ async function main(): Promise<void> {
       preHook: async (toolName, input) => hookManager.runHooks('PreToolUse', { tool: toolName, args: input }),
       postHook: async (toolName, input, result) => { await hookManager.runHooks('PostToolUse', { tool: toolName, args: input, result }); },
       planMode: getMode() === 'plan',
+      fallbackProviders: [...fallbackProviders],
+      onProviderSwitch: handleProviderSwitch,
+      interactiveModelSelect,
     });
     logger.info('세션 종료 (single prompt)');
     await hookManager.runHooks('SessionEnd', {});
@@ -339,26 +457,18 @@ async function main(): Promise<void> {
     compressor,
     exitFn: async () => {
       stopSpinner();
-      console.log(chalk.dim('\nSaving session...'));
+      console.log(chalk.dim(`\n${t('repl.saving')}...`));
       sessionManager.save(conversation, undefined, provider.model);
       await hookManager.runHooks('SessionEnd', {});
       await mcpManager.disconnectAll();
     },
     setProvider: (name: string, model: string) => {
       const newProvider = name || providerName;
-      switch (newProvider) {
-        case 'openai':
-          provider = new OpenAIProvider({ model, maxTokens: config.maxTokens });
-          break;
-        case 'ollama':
-          provider = new OllamaProvider({ model, maxTokens: config.maxTokens });
-          break;
-        default:
-          provider = new AnthropicProvider({ model, maxTokens: config.maxTokens });
-          break;
-      }
+      provider = createProviderFromConfig(newProvider, model);
       tokenTracker.setModel(model);
       statusLine.update({ model, provider: newProvider });
+      const newSubAgentHandler = createSubAgentHandler(provider, registry);
+      setSubAgentHandler(newSubAgentHandler);
     },
     reloadSystemPrompt: () => {
       conversation.setSystemPrompt(buildPrompt());
@@ -375,7 +485,7 @@ async function main(): Promise<void> {
 
       // Auto-compact if needed
       if (compressor.shouldCompress(conversation)) {
-        console.log(chalk.dim('Auto-compacting conversation...'));
+        console.log(chalk.dim(t('agent.autoCompact')));
         await compressor.compress(conversation, provider);
         conversation.setSystemPrompt(buildPrompt());
       }
@@ -389,6 +499,9 @@ async function main(): Promise<void> {
         preHook: async (toolName, input) => hookManager.runHooks('PreToolUse', { tool: toolName, args: input }),
         postHook: async (toolName, input, result) => { await hookManager.runHooks('PostToolUse', { tool: toolName, args: input, result }); },
         planMode: getMode() === 'plan',
+        fallbackProviders: [...fallbackProviders],
+        onProviderSwitch: handleProviderSwitch,
+        interactiveModelSelect,
       });
     },
 
@@ -408,7 +521,7 @@ async function main(): Promise<void> {
     onExit: async () => {
       stopSpinner();
       logger.info('세션 종료 (REPL exit)');
-      console.log(chalk.dim('\nSaving session...'));
+      console.log(chalk.dim(`\n${t('repl.saving')}...`));
       sessionManager.save(conversation, undefined, provider.model);
       checkpointManager.cleanup();
       await hookManager.runHooks('SessionEnd', {});

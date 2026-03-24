@@ -9,6 +9,7 @@ import { startSpinner, stopSpinner, updateSpinner } from '../ui/spinner.js';
 import { renderMarkdown, renderAssistantPrefix } from '../ui/renderer.js';
 import chalk from 'chalk';
 import { logger } from '../utils/logger.js';
+import { t } from '../i18n/index.js';
 
 export interface AgentLoopOptions {
   provider: LlmProvider;
@@ -23,6 +24,9 @@ export interface AgentLoopOptions {
   preHook?: (toolName: string, input: Record<string, unknown>) => Promise<{ proceed: boolean; updatedInput?: Record<string, unknown> }>;
   postHook?: (toolName: string, input: Record<string, unknown>, result: any) => Promise<void>;
   planMode?: boolean;
+  fallbackProviders?: LlmProvider[];
+  onProviderSwitch?: (provider: LlmProvider) => void;
+  interactiveModelSelect?: () => Promise<LlmProvider | null>;
 }
 
 const MAX_RETRIES = 3;
@@ -33,12 +37,14 @@ export async function agentLoop(
   options: AgentLoopOptions
 ): Promise<string> {
   const {
-    provider,
     registry,
     maxIterations = 50,
     stream = true,
     showOutput = true,
   } = options;
+
+  let currentProvider = options.provider;
+  const fallbacks = [...(options.fallbackProviders || [])];
 
   const conversation = options.conversation ?? new Conversation();
   if (options.systemPrompt) {
@@ -64,16 +70,56 @@ export async function agentLoop(
 
     // Call LLM
     let response: LlmResponse;
-    const spinner = showOutput ? startSpinner('Thinking...') : null;
+    const spinner = showOutput ? startSpinner(t('agent.thinking')) : null;
 
     try {
-      response = await callLlmWithRetry(provider, conversation, registry, stream, options, showOutput);
-    } catch (err) {
+      response = await callLlmWithRetry(currentProvider, conversation, registry, stream, options, showOutput);
+    } catch (err: any) {
       stopSpinner();
+
+      // Rate limit exhausted — try fallback provider
+      const status = err.status || err.statusCode;
+      if (status === 429) {
+        // Mode A: auto-fallback chain
+        if (fallbacks.length > 0) {
+          const nextProvider = fallbacks.shift()!;
+          if (showOutput) {
+            console.log(chalk.yellow(`\n⚠ ${t('agent.rateLimit', currentProvider.name, currentProvider.model, nextProvider.name, nextProvider.model)}`));
+          }
+          logger.info('Rate limit fallback', {
+            from: `${currentProvider.name}/${currentProvider.model}`,
+            to: `${nextProvider.name}/${nextProvider.model}`,
+            remainingFallbacks: fallbacks.length,
+          });
+          currentProvider = nextProvider;
+          options.onProviderSwitch?.(currentProvider);
+          iterations--;
+          continue;
+        }
+
+        // Mode B: interactive model selection
+        if (options.interactiveModelSelect) {
+          if (showOutput) {
+            console.log(chalk.yellow(`\n⚠ ${t('agent.selectModel')}`));
+          }
+          const selected = await options.interactiveModelSelect();
+          if (selected) {
+            logger.info('Interactive model switch', {
+              from: `${currentProvider.name}/${currentProvider.model}`,
+              to: `${selected.name}/${selected.model}`,
+            });
+            currentProvider = selected;
+            options.onProviderSwitch?.(currentProvider);
+            iterations--;
+            continue;
+          }
+        }
+      }
+
       const errMsg = err instanceof Error ? err.message : String(err);
-      logger.error('LLM 호출 실패', { model: provider.model }, err instanceof Error ? err : new Error(errMsg));
+      logger.error('LLM 호출 실패', { model: currentProvider.model }, err instanceof Error ? err : new Error(errMsg));
       if (showOutput) {
-        console.error(chalk.red(`\nLLM Error: ${errMsg}`));
+        console.error(chalk.red(`\n${t('agent.llmError', errMsg)}`));
       }
       return `Error communicating with LLM: ${errMsg}`;
     }
@@ -90,7 +136,7 @@ export async function agentLoop(
         cost: stats.cost,
       });
       logger.debug('LLM 응답 수신', {
-        model: provider.model,
+        model: currentProvider.model,
         inputTokens: response.usage.input_tokens,
         outputTokens: response.usage.output_tokens,
         stopReason: response.stopReason,
@@ -124,7 +170,7 @@ export async function agentLoop(
 
     if (response.stopReason === 'max_tokens') {
       if (showOutput) {
-        console.log(chalk.yellow('\n⚠ Response truncated (max tokens reached)'));
+        console.log(chalk.yellow(`\n⚠ ${t('agent.truncated')}`));
       }
     }
 
@@ -170,7 +216,7 @@ export async function agentLoop(
 
   if (iterations >= maxIterations) {
     if (showOutput) {
-      console.log(chalk.yellow(`\n⚠ Agent loop reached maximum iterations (${maxIterations})`));
+      console.log(chalk.yellow(`\n⚠ ${t('agent.maxIterations', String(maxIterations))}`));
     }
   }
 
@@ -185,7 +231,7 @@ async function callLlmWithRetry(
   options: AgentLoopOptions,
   showOutput: boolean
 ): Promise<LlmResponse> {
-  let lastError: Error | null = null;
+  let lastError: any = null;
 
   for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
     try {
@@ -219,24 +265,25 @@ async function callLlmWithRetry(
 
       return response;
     } catch (err: any) {
-      lastError = err instanceof Error ? err : new Error(String(err));
+      lastError = err;
 
       // Check if retryable
       const status = err.status || err.statusCode;
       if (status === 429 || (status >= 500 && status < 600)) {
         const delay = RETRY_DELAYS[attempt] || 4000;
         if (showOutput) {
-          updateSpinner(`API error (${status}), retrying in ${delay / 1000}s...`);
+          updateSpinner(t('agent.retrying', String(status), String(delay / 1000)));
         }
         await sleep(delay);
         continue;
       }
 
       // Non-retryable error
-      throw lastError;
+      throw err;
     }
   }
 
+  // Retries exhausted — throw with original error (preserving status code)
   throw lastError || new Error('Max retries exceeded');
 }
 

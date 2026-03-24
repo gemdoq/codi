@@ -4,6 +4,7 @@ import * as path from 'path';
 import chalk from 'chalk';
 import * as readline from 'node:readline/promises';
 import { stdin as input, stdout as output } from 'process';
+import { setLocale, detectOsLocale, t, type Locale } from './i18n/index.js';
 
 const isWindows = os.platform() === 'win32';
 
@@ -48,19 +49,48 @@ export async function runSetupWizard(): Promise<SetupResult | null> {
   console.log(chalk.cyan.bold('  │') + chalk.white.bold('     Codi (코디) - First Time Setup   ') + chalk.cyan.bold('│'));
   console.log(chalk.cyan.bold('  ╰─────────────────────────────────────╯'));
   console.log('');
-  console.log(chalk.dim('  API key not found. Let\'s set one up!'));
+
+  // ── Language selection (always shown in both languages) ──
+  console.log(chalk.bold('  Select your language / 언어를 선택하세요:'));
+  console.log('');
+  console.log(`  ${chalk.cyan('1.')} English`);
+  console.log(`  ${chalk.cyan('2.')} 한국어 (Korean)`);
+  console.log(`  ${chalk.cyan('3.')} Auto-detect / 자동 감지`);
+  console.log('');
+
+  const langChoice = await rl.question(chalk.cyan('  Choice / 선택 [3]: '));
+  const langTrimmed = langChoice.trim() || '3';
+
+  let selectedLocale: Locale;
+  switch (langTrimmed) {
+    case '1':
+      selectedLocale = 'en';
+      break;
+    case '2':
+      selectedLocale = 'ko';
+      break;
+    case '3':
+    default:
+      selectedLocale = detectOsLocale();
+      break;
+  }
+  setLocale(selectedLocale);
+
+  // From here on, use t() for all messages
+  console.log('');
+  console.log(chalk.dim(`  ${t('setup.noKey')}`));
   console.log('');
 
   // Provider selection
-  console.log(chalk.bold('  Which AI provider would you like to use?'));
+  console.log(chalk.bold(`  ${t('setup.selectProvider')}`));
   console.log('');
-  console.log(`  ${chalk.cyan('1.')} Google Gemini ${chalk.green('(Free tier available)')}`);
-  console.log(`  ${chalk.cyan('2.')} OpenAI (GPT-4o, etc.)`);
-  console.log(`  ${chalk.cyan('3.')} Anthropic (Claude)`);
-  console.log(`  ${chalk.cyan('4.')} Ollama ${chalk.green('(Free, local)')}`);
+  console.log(`  ${chalk.cyan('1.')} ${t('setup.gemini')} ${chalk.green(t('setup.gemini.tag'))}`);
+  console.log(`  ${chalk.cyan('2.')} ${t('setup.openai')}`);
+  console.log(`  ${chalk.cyan('3.')} ${t('setup.anthropic')}`);
+  console.log(`  ${chalk.cyan('4.')} ${t('setup.ollama')} ${chalk.green(t('setup.ollama.tag'))}`);
   console.log('');
 
-  const choice = await rl.question(chalk.cyan('  Choice [1]: '));
+  const choice = await rl.question(chalk.cyan(`  ${t('setup.choice', '1')}`));
   const providerChoice = choice.trim() || '1';
 
   let provider = 'openai';
@@ -93,50 +123,52 @@ export async function runSetupWizard(): Promise<SetupResult | null> {
       break;
     case '4':
       console.log('');
-      console.log(chalk.green('  ✓ Ollama selected! No API key needed.'));
-      console.log(chalk.dim('  Make sure Ollama is running: ollama serve'));
-      console.log(chalk.dim('  And pull a model: ollama pull llama3.1'));
+      console.log(chalk.green(`  ✓ ${t('setup.ollama.selected')}`));
+      console.log(chalk.dim(`  ${t('setup.ollama.hint1')}`));
+      console.log(chalk.dim(`  ${t('setup.ollama.hint2')}`));
       console.log('');
-      console.log(chalk.dim('  Start Codi with:'));
+      console.log(chalk.dim(`  ${t('setup.ollama.start')}`));
       console.log(chalk.cyan('    codi --provider ollama --model llama3.1'));
       console.log('');
+      saveLocale(selectedLocale);
       rl.close();
       return null;
     default:
-      console.log(chalk.yellow('  Invalid choice. Using Gemini (default).'));
+      console.log(chalk.yellow(`  ${t('setup.invalidChoice')}`));
       break;
   }
 
   // API key input
   if (signupUrl) {
     console.log('');
-    console.log(chalk.bold('  Get your API key:'));
+    console.log(chalk.bold(`  ${t('setup.getKey')}`));
     console.log(chalk.cyan(`  → ${signupUrl}`));
     console.log('');
   }
 
-  const apiKey = await rl.question(chalk.cyan('  Paste your API key: '));
+  const apiKey = await rl.question(chalk.cyan(`  ${t('setup.pasteKey')}`));
   rl.close();
 
   if (!apiKey.trim()) {
-    console.log(chalk.yellow('\n  No API key provided. Setup cancelled.'));
+    console.log(chalk.yellow(`\n  ${t('setup.noKeyProvided')}`));
     const laterCmd = isWindows
       ? `$env:${envVarName}="your-key"`
       : `export ${envVarName}=your-key`;
-    console.log(chalk.dim(`  You can set it later: ${laterCmd}\n`));
+    console.log(chalk.dim(`  ${t('setup.setLater', laterCmd)}\n`));
+    saveLocale(selectedLocale);
     return null;
   }
 
   // Save method selection
   const rl2 = readline.createInterface({ input, output });
   console.log('');
-  console.log(chalk.bold('  How would you like to save it?'));
+  console.log(chalk.bold(`  ${t('setup.saveMethod')}`));
   console.log('');
-  console.log(`  ${chalk.cyan('1.')} Save to ~/.codi/settings.json ${chalk.green('(Recommended)')}`);
-  console.log(`  ${chalk.cyan('2.')} Show export command (manual setup)`);
+  console.log(`  ${chalk.cyan('1.')} ${t('setup.saveFile')} ${chalk.green(t('setup.saveFile.tag'))}`);
+  console.log(`  ${chalk.cyan('2.')} ${t('setup.saveManual')}`);
   console.log('');
 
-  const saveChoice = await rl2.question(chalk.cyan('  Choice [1]: '));
+  const saveChoice = await rl2.question(chalk.cyan(`  ${t('setup.choice', '1')}`));
   rl2.close();
 
   const trimmedKey = apiKey.trim();
@@ -144,20 +176,21 @@ export async function runSetupWizard(): Promise<SetupResult | null> {
   if (saveChoice.trim() === '2') {
     console.log('');
     if (isWindows) {
-      console.log(chalk.bold('  Run this command in PowerShell (admin) to set permanently:'));
+      console.log(chalk.bold(`  ${t('setup.win.permanent')}`));
       console.log('');
       console.log(chalk.cyan(`    [System.Environment]::SetEnvironmentVariable('${envVarName}', '${trimmedKey}', 'User')`));
       console.log('');
-      console.log(chalk.dim('  Or set temporarily for this session:'));
+      console.log(chalk.dim(`  ${t('setup.win.temporary')}`));
       console.log(chalk.cyan(`    $env:${envVarName}="${trimmedKey}"`));
     } else {
-      console.log(chalk.bold('  Add this to your shell profile (~/.zshrc or ~/.bashrc):'));
+      console.log(chalk.bold(`  ${t('setup.unix.profile')}`));
       console.log('');
       console.log(chalk.cyan(`    export ${envVarName}=${trimmedKey}`));
       console.log('');
-      console.log(chalk.dim('  Then restart your terminal or run: source ~/.zshrc'));
+      console.log(chalk.dim(`  ${t('setup.unix.reload')}`));
     }
     console.log('');
+    saveLocale(selectedLocale);
     return { apiKey: trimmedKey, provider };
   }
 
@@ -181,6 +214,9 @@ export async function runSetupWizard(): Promise<SetupResult | null> {
     }
     (settings['apiKeys'] as Record<string, string>)[keyName] = trimmedKey;
 
+    // Save locale
+    settings['locale'] = selectedLocale;
+
     if (providerChoice === '2') {
       settings['provider'] = 'openai';
       settings['model'] = model;
@@ -193,16 +229,41 @@ export async function runSetupWizard(): Promise<SetupResult | null> {
     fs.writeFileSync(SETTINGS_PATH, JSON.stringify(settings, null, 2), 'utf-8');
 
     console.log('');
-    console.log(chalk.green('  ✓ Settings saved to ~/.codi/settings.json'));
-    console.log(chalk.dim(`  Provider: ${provider} | Model: ${model}`));
+    console.log(chalk.green(`  ✓ ${t('setup.saved')}`));
+    console.log(chalk.dim(`  ${t('setup.providerModel', provider, model)}`));
     console.log('');
   } catch (err) {
-    console.log(chalk.red(`\n  Failed to save settings: ${err}`));
+    console.log(chalk.red(`\n  ${t('setup.saveFailed', String(err))}`));
     const manualCmd = isWindows
       ? `$env:${envVarName}="${trimmedKey}"`
       : `export ${envVarName}=${trimmedKey}`;
-    console.log(chalk.dim(`  Set manually: ${manualCmd}\n`));
+    console.log(chalk.dim(`  ${t('setup.setManually', manualCmd)}\n`));
   }
 
   return { apiKey: trimmedKey, provider };
+}
+
+/**
+ * Save locale to settings file (for cases where we don't save the full settings).
+ */
+function saveLocale(locale: Locale): void {
+  try {
+    if (!fs.existsSync(SETTINGS_DIR)) {
+      fs.mkdirSync(SETTINGS_DIR, { recursive: true });
+    }
+
+    let settings: Record<string, unknown> = {};
+    if (fs.existsSync(SETTINGS_PATH)) {
+      try {
+        settings = JSON.parse(fs.readFileSync(SETTINGS_PATH, 'utf-8'));
+      } catch {
+        settings = {};
+      }
+    }
+
+    settings['locale'] = locale;
+    fs.writeFileSync(SETTINGS_PATH, JSON.stringify(settings, null, 2), 'utf-8');
+  } catch {
+    // Non-fatal
+  }
 }

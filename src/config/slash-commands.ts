@@ -6,10 +6,12 @@ import { tokenTracker } from '../agent/token-tracker.js';
 import { sessionManager } from '../agent/session.js';
 import { memoryManager } from '../agent/memory.js';
 import { checkpointManager } from '../agent/checkpoint.js';
-import { setMode, getMode, listPlans } from '../agent/mode-manager.js';
+import { setMode, getMode } from '../agent/mode-manager.js';
 import { statusLine } from '../ui/status-line.js';
 import { mcpManager } from '../mcp/mcp-manager.js';
 import { configManager } from './config.js';
+import { t } from '../i18n/index.js';
+import { setLocale, getLocale, getLocaleDisplayName, getSupportedLocales, type Locale } from '../i18n/index.js';
 import type { Conversation } from '../agent/conversation.js';
 import type { LlmProvider } from '../llm/provider.js';
 import type { ContextCompressor } from '../agent/context-compressor.js';
@@ -37,14 +39,14 @@ export function createBuiltinCommands(): SlashCommand[] {
       description: 'Show available commands',
       handler: async () => {
         const commands = createBuiltinCommands();
-        console.log(chalk.bold('\nAvailable Commands:\n'));
+        console.log(chalk.bold(`\n${t('cmd.help.title')}\n`));
         for (const cmd of commands) {
           const aliases = cmd.aliases ? chalk.dim(` (${cmd.aliases.join(', ')})`) : '';
           console.log(`  ${chalk.cyan(cmd.name)}${aliases} - ${cmd.description}`);
         }
         console.log('');
-        console.log(chalk.dim('  Prefixes: ! (bash), @ (file reference)'));
-        console.log(chalk.dim('  Use \\ at end of line for multiline input'));
+        console.log(chalk.dim(`  ${t('cmd.help.prefixes')}`));
+        console.log(chalk.dim(`  ${t('cmd.help.multiline')}`));
         console.log('');
         return true;
       },
@@ -57,7 +59,7 @@ export function createBuiltinCommands(): SlashCommand[] {
         if (ctx.exitFn) {
           await ctx.exitFn();
         }
-        console.log(chalk.dim('\nGoodbye!\n'));
+        console.log(chalk.dim(`\n${t('cmd.quit.bye')}\n`));
         process.exit(0);
       },
     },
@@ -68,7 +70,7 @@ export function createBuiltinCommands(): SlashCommand[] {
       handler: async (_args, ctx) => {
         ctx.conversation.clear();
         ctx.reloadSystemPrompt();
-        console.log(chalk.green('✓ Conversation cleared'));
+        console.log(chalk.green(`✓ ${t('cmd.clear.done')}`));
         return true;
       },
     },
@@ -78,7 +80,7 @@ export function createBuiltinCommands(): SlashCommand[] {
       handler: async (args, ctx) => {
         if (!args) {
           const info = statusLine.getInfo();
-          console.log(chalk.cyan(`Current model: ${info.model} (${info.provider})`));
+          console.log(chalk.cyan(t('cmd.model.current', info.model, info.provider)));
           return true;
         }
 
@@ -88,7 +90,7 @@ export function createBuiltinCommands(): SlashCommand[] {
         } else {
           ctx.setProvider('', args);
         }
-        console.log(chalk.green(`✓ Model switched to: ${args}`));
+        console.log(chalk.green(`✓ ${t('cmd.model.switched', args)}`));
         return true;
       },
     },
@@ -96,10 +98,10 @@ export function createBuiltinCommands(): SlashCommand[] {
       name: '/compact',
       description: 'Compress conversation history (optional: focus hint)',
       handler: async (args, ctx) => {
-        console.log(chalk.dim('Compressing conversation...'));
+        console.log(chalk.dim(t('cmd.compact.compressing')));
         await ctx.compressor.compress(ctx.conversation, ctx.provider, args || undefined);
         ctx.reloadSystemPrompt();
-        console.log(chalk.green('✓ Conversation compressed'));
+        console.log(chalk.green(`✓ ${t('cmd.compact.done')}`));
         return true;
       },
     },
@@ -110,31 +112,31 @@ export function createBuiltinCommands(): SlashCommand[] {
         const session = tokenTracker.getSessionStats();
         const total = tokenTracker.getStats();
 
-        console.log(chalk.bold('\nToken Usage & Cost:\n'));
+        console.log(chalk.bold(`\n${t('cmd.cost.title')}\n`));
 
         // Session stats
-        console.log(chalk.cyan('  [Current Session]'));
-        console.log(`    Requests:    ${session.requests}`);
-        console.log(`    Input:       ${formatTokens(session.inputTokens)}`);
-        console.log(`    Output:      ${formatTokens(session.outputTokens)}`);
-        console.log(`    Total:       ${formatTokens(session.totalTokens)}`);
-        console.log(`    Cost:        $${session.cost.toFixed(4)}`);
+        console.log(chalk.cyan(`  ${t('cmd.cost.session')}`));
+        console.log(`    ${t('cmd.cost.requests', String(session.requests))}`);
+        console.log(`    ${t('cmd.cost.input', formatTokens(session.inputTokens))}`);
+        console.log(`    ${t('cmd.cost.output', formatTokens(session.outputTokens))}`);
+        console.log(`    ${t('cmd.cost.total', formatTokens(session.totalTokens))}`);
+        console.log(`    ${t('cmd.cost.cost', session.cost.toFixed(4))}`);
         if (session.requests > 0) {
-          console.log(`    Avg/Request: $${session.avgCostPerRequest.toFixed(4)}`);
+          console.log(`    ${t('cmd.cost.avg', session.avgCostPerRequest.toFixed(4))}`);
         }
         if (session.lastRequestCost) {
-          console.log(chalk.dim(`    Last Request: $${session.lastRequestCost.cost.toFixed(4)} (${formatTokens(session.lastRequestCost.inputTokens)} in / ${formatTokens(session.lastRequestCost.outputTokens)} out)`));
+          console.log(chalk.dim(`    ${t('cmd.cost.last', session.lastRequestCost.cost.toFixed(4), formatTokens(session.lastRequestCost.inputTokens), formatTokens(session.lastRequestCost.outputTokens))}`));
         }
 
         // Total stats (only show if different from session)
         if (total.requests !== session.requests) {
           console.log('');
-          console.log(chalk.cyan('  [Total Accumulated]'));
-          console.log(`    Requests:    ${total.requests}`);
-          console.log(`    Input:       ${formatTokens(total.inputTokens)}`);
-          console.log(`    Output:      ${formatTokens(total.outputTokens)}`);
-          console.log(`    Total:       ${formatTokens(total.totalTokens)}`);
-          console.log(`    Cost:        $${total.cost.toFixed(4)}`);
+          console.log(chalk.cyan(`  ${t('cmd.cost.accumulated')}`));
+          console.log(`    ${t('cmd.cost.requests', String(total.requests))}`);
+          console.log(`    ${t('cmd.cost.input', formatTokens(total.inputTokens))}`);
+          console.log(`    ${t('cmd.cost.output', formatTokens(total.outputTokens))}`);
+          console.log(`    ${t('cmd.cost.total', formatTokens(total.totalTokens))}`);
+          console.log(`    ${t('cmd.cost.cost', total.cost.toFixed(4))}`);
         }
 
         console.log('');
@@ -146,9 +148,9 @@ export function createBuiltinCommands(): SlashCommand[] {
       description: 'Show current configuration',
       handler: async () => {
         const config = configManager.get();
-        console.log(chalk.bold('\nConfiguration:\n'));
+        console.log(chalk.bold(`\n${t('cmd.config.title')}\n`));
         console.log(chalk.dim(JSON.stringify(config, null, 2)));
-        console.log(chalk.dim(`\nConfig files: ${configManager.getConfigPaths().join(', ') || '(none)'}`));
+        console.log(chalk.dim(`\n${t('cmd.config.files', configManager.getConfigPaths().join(', ') || t('cmd.config.none'))}`));
         console.log('');
         return true;
       },
@@ -158,10 +160,10 @@ export function createBuiltinCommands(): SlashCommand[] {
       description: 'Show permission rules',
       handler: async () => {
         const config = configManager.get();
-        console.log(chalk.bold('\nPermission Rules:\n'));
-        console.log(chalk.green('  Allow: ') + config.permissions.allow.join(', '));
-        console.log(chalk.red('  Deny:  ') + (config.permissions.deny.join(', ') || '(none)'));
-        console.log(chalk.yellow('  Ask:   ') + config.permissions.ask.join(', '));
+        console.log(chalk.bold(`\n${t('cmd.permissions.title')}\n`));
+        console.log(chalk.green(`  ${t('cmd.permissions.allow')}`) + config.permissions.allow.join(', '));
+        console.log(chalk.red(`  ${t('cmd.permissions.deny')}`) + (config.permissions.deny.join(', ') || t('cmd.config.none')));
+        console.log(chalk.yellow(`  ${t('cmd.permissions.ask')}`) + config.permissions.ask.join(', '));
         console.log('');
         return true;
       },
@@ -172,7 +174,7 @@ export function createBuiltinCommands(): SlashCommand[] {
       handler: async (args, ctx) => {
         const name = args || undefined;
         const id = sessionManager.save(ctx.conversation, name, statusLine.getInfo().model);
-        console.log(chalk.green(`✓ Session saved: ${id}`));
+        console.log(chalk.green(`✓ ${t('cmd.save.done', id)}`));
         return true;
       },
     },
@@ -183,13 +185,13 @@ export function createBuiltinCommands(): SlashCommand[] {
       handler: async (args, ctx) => {
         const id = args || sessionManager.getLatest()?.id;
         if (!id) {
-          console.log(chalk.yellow('No sessions found. Use /save to save a session first.'));
+          console.log(chalk.yellow(t('cmd.resume.noSessions')));
           return true;
         }
 
         const session = sessionManager.load(id);
         if (!session) {
-          console.log(chalk.red(`Session not found: ${id}`));
+          console.log(chalk.red(t('cmd.resume.notFound', id)));
           return true;
         }
 
@@ -202,7 +204,7 @@ export function createBuiltinCommands(): SlashCommand[] {
           else if (msg.role === 'assistant') ctx.conversation.addAssistantMessage(msg.content);
         }
 
-        console.log(chalk.green(`✓ Resumed session: ${id} (${session.meta.messageCount} messages)`));
+        console.log(chalk.green(`✓ ${t('cmd.resume.done', id, String(session.meta.messageCount))}`));
         return true;
       },
     },
@@ -212,7 +214,7 @@ export function createBuiltinCommands(): SlashCommand[] {
       handler: async (args, ctx) => {
         const name = args || `fork-${Date.now()}`;
         const id = sessionManager.save(ctx.conversation, name, statusLine.getInfo().model);
-        console.log(chalk.green(`✓ Conversation forked: ${id}`));
+        console.log(chalk.green(`✓ ${t('cmd.fork.done', id)}`));
         return true;
       },
     },
@@ -224,7 +226,8 @@ export function createBuiltinCommands(): SlashCommand[] {
         const newMode = current === 'plan' ? 'execute' : 'plan';
         setMode(newMode);
         statusLine.update({ mode: newMode });
-        console.log(chalk.cyan(`Mode: ${newMode === 'plan' ? 'PLAN (read-only)' : 'EXECUTE'}`));
+        const modeLabel = newMode === 'plan' ? t('cmd.plan.plan') : t('cmd.plan.execute');
+        console.log(chalk.cyan(t('cmd.plan.mode', modeLabel)));
         return true;
       },
     },
@@ -235,18 +238,18 @@ export function createBuiltinCommands(): SlashCommand[] {
         const index = memoryManager.loadIndex();
         const topics = memoryManager.listTopics();
 
-        console.log(chalk.bold('\nAuto Memory:\n'));
-        console.log(chalk.dim(`Directory: ${memoryManager.getMemoryDir()}`));
+        console.log(chalk.bold(`\n${t('cmd.memory.title')}\n`));
+        console.log(chalk.dim(`${t('cmd.memory.dir', memoryManager.getMemoryDir())}`));
 
         if (index) {
-          console.log(chalk.dim('\nMEMORY.md:'));
+          console.log(chalk.dim(`\n${t('cmd.memory.index')}`));
           console.log(index);
         } else {
-          console.log(chalk.dim('\nNo memory saved yet.'));
+          console.log(chalk.dim(`\n${t('cmd.memory.empty')}`));
         }
 
         if (topics.length > 0) {
-          console.log(chalk.dim(`\nTopics: ${topics.join(', ')}`));
+          console.log(chalk.dim(`\n${t('cmd.memory.topics', topics.join(', '))}`));
         }
         console.log('');
         return true;
@@ -258,7 +261,7 @@ export function createBuiltinCommands(): SlashCommand[] {
       handler: async () => {
         const codiPath = path.join(process.cwd(), 'CODI.md');
         if (fs.existsSync(codiPath)) {
-          console.log(chalk.yellow('CODI.md already exists'));
+          console.log(chalk.yellow(t('cmd.init.exists')));
           return true;
         }
 
@@ -277,7 +280,7 @@ export function createBuiltinCommands(): SlashCommand[] {
 <!-- Code style, naming conventions, etc. -->
 `;
         fs.writeFileSync(codiPath, content, 'utf-8');
-        console.log(chalk.green('✓ Created CODI.md'));
+        console.log(chalk.green(`✓ ${t('cmd.init.done')}`));
         return true;
       },
     },
@@ -296,7 +299,7 @@ export function createBuiltinCommands(): SlashCommand[] {
         }
 
         fs.writeFileSync(filePath, md, 'utf-8');
-        console.log(chalk.green(`✓ Exported to ${filePath}`));
+        console.log(chalk.green(`✓ ${t('cmd.export.done', filePath)}`));
         return true;
       },
     },
@@ -307,10 +310,10 @@ export function createBuiltinCommands(): SlashCommand[] {
         const { taskManager } = await import('../tools/task-tools.js');
         const tasks = taskManager.list();
         if (tasks.length === 0) {
-          console.log(chalk.dim('\nNo tasks.\n'));
+          console.log(chalk.dim(`\n${t('cmd.tasks.empty')}\n`));
           return true;
         }
-        console.log(chalk.bold('\nTasks:\n'));
+        console.log(chalk.bold(`\n${t('cmd.tasks.title')}\n`));
         for (const task of tasks) {
           const statusIcon = task.status === 'completed' ? chalk.green('✓') :
             task.status === 'in_progress' ? chalk.yellow('⟳') : chalk.dim('○');
@@ -326,14 +329,14 @@ export function createBuiltinCommands(): SlashCommand[] {
       handler: async () => {
         const config = configManager.get();
         const info = statusLine.getInfo();
-        const stats = tokenTracker.getStats();
         const mcpServers = mcpManager.listServers();
 
-        console.log(chalk.bold('\nCodi Status:\n'));
+        console.log(chalk.bold(`\n${t('cmd.status.title')}\n`));
         console.log(`  Version:  0.1.0`);
         console.log(`  Model:    ${info.model}`);
         console.log(`  Provider: ${config.provider}`);
         console.log(`  Mode:     ${getMode()}`);
+        console.log(`  Locale:   ${getLocale()}`);
         console.log(`  Tokens:   ${tokenTracker.format()}`);
         console.log(`  MCP:      ${mcpServers.length} server(s)`);
         for (const s of mcpServers) {
@@ -352,10 +355,10 @@ export function createBuiltinCommands(): SlashCommand[] {
         const pct = Math.round((estimated / max) * 100);
         const bar = '█'.repeat(Math.round(pct / 5)) + '░'.repeat(20 - Math.round(pct / 5));
 
-        console.log(chalk.bold('\nContext Window:\n'));
+        console.log(chalk.bold(`\n${t('cmd.context.title')}\n`));
         console.log(`  ${bar} ${pct}%`);
-        console.log(`  ~${estimated.toLocaleString()} / ${max.toLocaleString()} tokens`);
-        console.log(`  Messages: ${ctx.conversation.getMessageCount()}`);
+        console.log(`  ${t('cmd.context.tokens', estimated.toLocaleString(), max.toLocaleString())}`);
+        console.log(`  ${t('cmd.context.messages', String(ctx.conversation.getMessageCount()))}`);
         console.log('');
         return true;
       },
@@ -366,13 +369,13 @@ export function createBuiltinCommands(): SlashCommand[] {
       handler: async (_args, ctx) => {
         const checkpoints = checkpointManager.list();
         if (checkpoints.length === 0) {
-          console.log(chalk.yellow('No checkpoints available.'));
+          console.log(chalk.yellow(t('cmd.rewind.noCheckpoints')));
           return true;
         }
 
         const result = checkpointManager.rewind();
         if (!result) {
-          console.log(chalk.yellow('No checkpoint to rewind to.'));
+          console.log(chalk.yellow(t('cmd.rewind.nothing')));
           return true;
         }
 
@@ -385,7 +388,7 @@ export function createBuiltinCommands(): SlashCommand[] {
           else if (msg.role === 'assistant') ctx.conversation.addAssistantMessage(msg.content);
         }
 
-        console.log(chalk.green(`✓ Rewound to checkpoint${result.description ? `: ${result.description}` : ''}`));
+        console.log(chalk.green(`✓ ${t('cmd.rewind.done', result.description ? `: ${result.description}` : '')}`));
         return true;
       },
     },
@@ -397,13 +400,13 @@ export function createBuiltinCommands(): SlashCommand[] {
           const { execSync } = await import('child_process');
           const diff = execSync('git diff', { encoding: 'utf-8', cwd: process.cwd() });
           if (!diff.trim()) {
-            console.log(chalk.dim('\nNo changes.\n'));
+            console.log(chalk.dim(`\n${t('cmd.diff.noChanges')}\n`));
           } else {
             const { renderDiff } = await import('../ui/renderer.js');
             console.log('\n' + renderDiff('', '', diff) + '\n');
           }
         } catch {
-          console.log(chalk.yellow('Not a git repository or git not available.'));
+          console.log(chalk.yellow(t('cmd.diff.notGit')));
         }
         return true;
       },
@@ -417,38 +420,33 @@ export function createBuiltinCommands(): SlashCommand[] {
           const staged = execSync('git diff --cached', { encoding: 'utf-8', cwd: process.cwd() });
           const unstaged = execSync('git diff', { encoding: 'utf-8', cwd: process.cwd() });
 
-          // 스테이징된 변경이 없으면 수정된 파일 자동 스테이징
           if (!staged.trim() && unstaged.trim()) {
-            // 추적되지 않는 파일 확인
             const untracked = execSync('git ls-files --others --exclude-standard', {
               encoding: 'utf-8',
               cwd: process.cwd(),
             }).trim();
 
             if (untracked) {
-              console.log(chalk.yellow(`\n주의: 추적되지 않는 파일이 있습니다 (자동 스테이징 안 됨):`));
+              console.log(chalk.yellow(`\n${t('cmd.commit.untracked')}`));
               for (const f of untracked.split('\n').slice(0, 10)) {
                 console.log(chalk.dim(`  ${f}`));
               }
               if (untracked.split('\n').length > 10) {
-                console.log(chalk.dim(`  ... 외 ${untracked.split('\n').length - 10}개`));
+                console.log(chalk.dim(`  ${t('cmd.commit.andMore', String(untracked.split('\n').length - 10))}`));
               }
               console.log('');
             }
 
-            // 수정된 파일만 자동 스테이징 (추적되지 않는 파일 제외)
-            console.log(chalk.dim('수정된 파일을 자동 스테이징합니다...'));
+            console.log(chalk.dim(t('cmd.commit.autoStaging')));
             execSync('git add -u', { encoding: 'utf-8', cwd: process.cwd() });
           }
 
-          // 스테이징 후 최종 diff 확인
           const finalDiff = execSync('git diff --cached', { encoding: 'utf-8', cwd: process.cwd() });
           if (!finalDiff.trim()) {
-            console.log(chalk.dim('\nNo changes to commit.\n'));
+            console.log(chalk.dim(`\n${t('cmd.commit.noChanges')}\n`));
             return true;
           }
 
-          // 최근 커밋 로그를 분석하여 컨벤션 감지
           let conventionHint = '';
           try {
             const recentLog = execSync('git log --oneline -10', {
@@ -457,7 +455,6 @@ export function createBuiltinCommands(): SlashCommand[] {
             }).trim();
 
             if (recentLog) {
-              // Conventional Commits 패턴 감지 (feat:, fix:, chore: 등)
               const conventionalPattern = /^[a-f0-9]+\s+(feat|fix|chore|docs|style|refactor|perf|test|build|ci|revert)(\(.+\))?[!]?:/;
               const lines = recentLog.split('\n');
               const conventionalCount = lines.filter((l) => conventionalPattern.test(l)).length;
@@ -469,7 +466,7 @@ export function createBuiltinCommands(): SlashCommand[] {
               conventionHint += `\n\n최근 커밋 참고:\n\`\`\`\n${recentLog}\n\`\`\``;
             }
           } catch {
-            // 커밋 로그 조회 실패 무시
+            // ignore
           }
 
           ctx.conversation.addUserMessage(
@@ -477,7 +474,7 @@ export function createBuiltinCommands(): SlashCommand[] {
           );
           return false;
         } catch {
-          console.log(chalk.yellow('Not a git repository or git not available.'));
+          console.log(chalk.yellow(t('cmd.diff.notGit')));
           return true;
         }
       },
@@ -492,7 +489,7 @@ export function createBuiltinCommands(): SlashCommand[] {
           const unstaged = execSync('git diff', { encoding: 'utf-8', cwd: process.cwd() });
           const diff = staged + unstaged;
           if (!diff.trim()) {
-            console.log(chalk.dim('\nNo changes to review.\n'));
+            console.log(chalk.dim(`\n${t('cmd.review.noChanges')}\n`));
             return true;
           }
           ctx.conversation.addUserMessage(
@@ -500,7 +497,7 @@ export function createBuiltinCommands(): SlashCommand[] {
           );
           return false;
         } catch {
-          console.log(chalk.yellow('Not a git repository or git not available.'));
+          console.log(chalk.yellow(t('cmd.diff.notGit')));
           return true;
         }
       },
@@ -510,13 +507,13 @@ export function createBuiltinCommands(): SlashCommand[] {
       description: 'Search past conversation sessions',
       handler: async (args) => {
         if (!args) {
-          console.log(chalk.yellow('Usage: /search <keyword>'));
+          console.log(chalk.yellow(t('cmd.search.usage')));
           return true;
         }
         const home = process.env['HOME'] || process.env['USERPROFILE'] || os.homedir();
         const sessionsDir = path.join(home, '.codi', 'sessions');
         if (!fs.existsSync(sessionsDir)) {
-          console.log(chalk.dim('\nNo sessions found.\n'));
+          console.log(chalk.dim(`\n${t('cmd.search.noSessions')}\n`));
           return true;
         }
         const files = fs.readdirSync(sessionsDir).filter((f) => f.endsWith('.jsonl'));
@@ -535,15 +532,15 @@ export function createBuiltinCommands(): SlashCommand[] {
               const date = stat.mtime.toISOString().split('T')[0]!;
               const preview = line.length > 100 ? line.slice(0, 100) + '...' : line;
               results.push({ sessionId, date, preview });
-              break; // one match per session
+              break;
             }
           }
         }
 
         if (results.length === 0) {
-          console.log(chalk.dim(`\nNo results for "${args}".\n`));
+          console.log(chalk.dim(`\n${t('cmd.search.noResults', args)}\n`));
         } else {
-          console.log(chalk.bold(`\nSearch results for "${args}":\n`));
+          console.log(chalk.bold(`\n${t('cmd.search.results', args)}\n`));
           for (const r of results) {
             console.log(`  ${chalk.cyan(r.sessionId)} ${chalk.dim(r.date)}`);
             console.log(`    ${chalk.dim(r.preview)}`);
@@ -558,7 +555,7 @@ export function createBuiltinCommands(): SlashCommand[] {
       description: 'Run a command and auto-fix errors (e.g., /fix npm run build)',
       handler: async (args, ctx) => {
         if (!args) {
-          console.log(chalk.yellow('Usage: /fix <command>'));
+          console.log(chalk.yellow(t('cmd.fix.usage')));
           return true;
         }
         const { execSync } = await import('child_process');
@@ -566,14 +563,14 @@ export function createBuiltinCommands(): SlashCommand[] {
           const isWin = os.platform() === 'win32';
           const shell = isWin ? 'powershell.exe' : undefined;
           const fixCmd = isWin ? `[Console]::OutputEncoding = [System.Text.Encoding]::UTF8; ${args}` : args;
-          const output = execSync(fixCmd, { encoding: 'utf-8', cwd: process.cwd(), stdio: 'pipe', shell });
-          console.log(chalk.green(`\n✓ Command succeeded. No errors to fix.\n`));
-          if (output.trim()) console.log(chalk.dim(output));
+          const cmdOutput = execSync(fixCmd, { encoding: 'utf-8', cwd: process.cwd(), stdio: 'pipe', shell });
+          console.log(chalk.green(`\n✓ ${t('cmd.fix.success')}\n`));
+          if (cmdOutput.trim()) console.log(chalk.dim(cmdOutput));
           return true;
         } catch (err: unknown) {
           const error = err as { stdout?: string; stderr?: string };
           const errorOutput = (error.stderr || '') + (error.stdout || '');
-          console.log(chalk.red(`\nCommand failed: ${args}\n`));
+          console.log(chalk.red(`\n${t('cmd.fix.failed', args)}\n`));
           ctx.conversation.addUserMessage(
             `다음 명령어를 실행했더니 에러가 발생했어. 에러를 분석하고 코드를 수정해줘.\n\nCommand: ${args}\n\n\`\`\`\n${errorOutput}\n\`\`\``
           );
@@ -590,15 +587,15 @@ export function createBuiltinCommands(): SlashCommand[] {
         if (args === 'list') {
           const history = getBackupHistory();
           if (history.length === 0) {
-            console.log(chalk.dim('\n되돌릴 파일 변경 이력이 없습니다.\n'));
+            console.log(chalk.dim(`\n${t('cmd.undo.noHistory')}\n`));
             return true;
           }
-          console.log(chalk.bold(`\n파일 변경 이력 (최근 ${Math.min(history.length, 20)}개):\n`));
+          console.log(chalk.bold(`\n${t('cmd.undo.history', String(Math.min(history.length, 20)))}\n`));
           const recent = history.slice(-20).reverse();
           for (let i = 0; i < recent.length; i++) {
             const entry = recent[i]!;
             const time = new Date(entry.timestamp).toLocaleTimeString();
-            const tag = entry.wasNew ? chalk.yellow('[새 파일]') : chalk.cyan('[수정]');
+            const tag = entry.wasNew ? chalk.yellow(t('cmd.undo.newFile')) : chalk.cyan(t('cmd.undo.modified'));
             console.log(`  ${i + 1}. ${tag} ${entry.originalPath} ${chalk.dim(time)}`);
           }
           console.log('');
@@ -607,12 +604,12 @@ export function createBuiltinCommands(): SlashCommand[] {
 
         const entry = undoLast();
         if (!entry) {
-          console.log(chalk.yellow('\n되돌릴 변경 사항이 없습니다.\n'));
+          console.log(chalk.yellow(`\n${t('cmd.undo.nothing')}\n`));
           return true;
         }
 
-        const action = entry.wasNew ? '삭제됨 (새로 생성된 파일)' : '이전 상태로 복원됨';
-        console.log(chalk.green(`\n✓ 되돌리기 완료: ${entry.originalPath}`));
+        const action = entry.wasNew ? t('cmd.undo.deleted') : t('cmd.undo.restored');
+        console.log(chalk.green(`\n✓ ${t('cmd.undo.done', entry.originalPath)}`));
         console.log(chalk.dim(`  ${action}`));
         console.log('');
         return true;
@@ -625,7 +622,6 @@ export function createBuiltinCommands(): SlashCommand[] {
         const { execSync } = await import('child_process');
         try {
           if (!args) {
-            // 이름 없으면 현재 브랜치 및 전체 목록 표시
             const current = execSync('git branch --show-current', {
               encoding: 'utf-8',
               cwd: process.cwd(),
@@ -634,7 +630,7 @@ export function createBuiltinCommands(): SlashCommand[] {
               encoding: 'utf-8',
               cwd: process.cwd(),
             }).trim();
-            console.log(chalk.bold(`\nCurrent branch: ${chalk.green(current || '(detached HEAD)')}\n`));
+            console.log(chalk.bold(`\n${t('cmd.branch.current', chalk.green(current || t('cmd.branch.detached')))}\n`));
             console.log(branches);
             console.log('');
           } else {
@@ -643,12 +639,12 @@ export function createBuiltinCommands(): SlashCommand[] {
               encoding: 'utf-8',
               cwd: process.cwd(),
             });
-            console.log(chalk.green(`\n✓ Created and switched to branch: ${name}\n`));
+            console.log(chalk.green(`\n✓ ${t('cmd.branch.created', name)}\n`));
           }
         } catch (err: unknown) {
           const error = err as { stderr?: string; message?: string };
           const msg = error.stderr || error.message || 'Unknown error';
-          console.log(chalk.red(`\nBranch operation failed: ${msg.trim()}\n`));
+          console.log(chalk.red(`\n${t('cmd.branch.failed', msg.trim())}\n`));
         }
         return true;
       },
@@ -663,26 +659,25 @@ export function createBuiltinCommands(): SlashCommand[] {
 
         const allowed = ['push', 'pop', 'list', 'drop', 'show', 'apply', 'clear'];
         if (!allowed.includes(action)) {
-          console.log(chalk.yellow(`Usage: /stash [${allowed.join('|')}]`));
+          console.log(chalk.yellow(t('cmd.stash.usage', allowed.join('|'))));
           return true;
         }
 
         try {
-          // stash clear는 위험하므로 경고
           if (action === 'clear') {
-            console.log(chalk.yellow('⚠ This will drop all stashes permanently.'));
+            console.log(chalk.yellow(`⚠ ${t('cmd.stash.clearWarn')}`));
           }
 
           const cmd = `git stash ${args.trim() || 'push'}`;
-          const output = execSync(cmd, {
+          const cmdOutput = execSync(cmd, {
             encoding: 'utf-8',
             cwd: process.cwd(),
           });
-          console.log(output.trim() ? `\n${output.trim()}\n` : chalk.dim('\n(no output)\n'));
+          console.log(cmdOutput.trim() ? `\n${cmdOutput.trim()}\n` : chalk.dim(`\n${t('cmd.stash.noOutput')}\n`));
         } catch (err: unknown) {
           const error = err as { stderr?: string; stdout?: string; message?: string };
           const msg = error.stderr || error.stdout || error.message || 'Unknown error';
-          console.log(chalk.red(`\nStash operation failed: ${msg.trim()}\n`));
+          console.log(chalk.red(`\n${t('cmd.stash.failed', msg.trim())}\n`));
         }
         return true;
       },
@@ -693,18 +688,16 @@ export function createBuiltinCommands(): SlashCommand[] {
       handler: async (_args, ctx) => {
         const { execSync } = await import('child_process');
         try {
-          // 현재 브랜치 확인
           const currentBranch = execSync('git branch --show-current', {
             encoding: 'utf-8',
             cwd: process.cwd(),
           }).trim();
 
           if (!currentBranch) {
-            console.log(chalk.yellow('Not on a branch (detached HEAD).'));
+            console.log(chalk.yellow(t('cmd.pr.notOnBranch')));
             return true;
           }
 
-          // 기본 브랜치 탐색 (main 또는 master)
           let baseBranch = 'main';
           try {
             execSync('git rev-parse --verify main', {
@@ -721,17 +714,16 @@ export function createBuiltinCommands(): SlashCommand[] {
               });
               baseBranch = 'master';
             } catch {
-              console.log(chalk.yellow('Cannot find base branch (main or master).'));
+              console.log(chalk.yellow(t('cmd.pr.noBase')));
               return true;
             }
           }
 
           if (currentBranch === baseBranch) {
-            console.log(chalk.yellow(`Already on ${baseBranch}. Switch to a feature branch first.`));
+            console.log(chalk.yellow(t('cmd.pr.onBase', baseBranch)));
             return true;
           }
 
-          // 커밋 로그와 diff 수집
           let commitLog = '';
           try {
             commitLog = execSync(`git log ${baseBranch}..HEAD --oneline`, {
@@ -739,11 +731,11 @@ export function createBuiltinCommands(): SlashCommand[] {
               cwd: process.cwd(),
             }).trim();
           } catch {
-            // merge-base가 없는 경우
+            // no merge base
           }
 
           if (!commitLog) {
-            console.log(chalk.yellow(`No commits ahead of ${baseBranch}.`));
+            console.log(chalk.yellow(t('cmd.pr.noCommits', baseBranch)));
             return true;
           }
 
@@ -754,7 +746,7 @@ export function createBuiltinCommands(): SlashCommand[] {
               cwd: process.cwd(),
             }).trim();
           } catch {
-            // diff stat 실패 무시
+            // ignore
           }
 
           let diff = '';
@@ -764,22 +756,21 @@ export function createBuiltinCommands(): SlashCommand[] {
               cwd: process.cwd(),
               maxBuffer: 10 * 1024 * 1024,
             });
-            // diff가 너무 크면 잘라내기
             if (diff.length > 50_000) {
               diff = diff.slice(0, 50_000) + '\n\n... (diff truncated, too large)';
             }
           } catch {
-            // diff 실패 무시
+            // ignore
           }
 
-          console.log(chalk.dim(`\nAnalyzing ${commitLog.split('\n').length} commit(s) from ${currentBranch}...\n`));
+          console.log(chalk.dim(`\n${t('cmd.pr.analyzing', String(commitLog.split('\n').length), currentBranch)}\n`));
 
           ctx.conversation.addUserMessage(
             `현재 브랜치 \`${currentBranch}\`에서 \`${baseBranch}\`로 보낼 Pull Request 설명을 생성해줘.\n\n다음 형식의 마크다운으로 출력해줘:\n- **Title**: PR 제목 (70자 이내, 영문)\n- **## Summary**: 변경 사항 요약 (1-3 bullet points)\n- **## Changes**: 주요 변경 파일 및 내용\n- **## Test Plan**: 테스트 계획 체크리스트\n\n### Commits:\n\`\`\`\n${commitLog}\n\`\`\`\n\n### Diff stat:\n\`\`\`\n${diffStat}\n\`\`\`\n\n### Full diff:\n\`\`\`diff\n${diff}\n\`\`\``
           );
           return false;
         } catch {
-          console.log(chalk.yellow('Not a git repository or git not available.'));
+          console.log(chalk.yellow(t('cmd.diff.notGit')));
           return true;
         }
       },
@@ -790,19 +781,67 @@ export function createBuiltinCommands(): SlashCommand[] {
       handler: async () => {
         const servers = mcpManager.listServers();
         if (servers.length === 0) {
-          console.log(chalk.dim('\nNo MCP servers connected.\n'));
-          console.log(chalk.dim('Add servers in .codi/mcp.json or ~/.codi/mcp.json'));
+          console.log(chalk.dim(`\n${t('cmd.mcp.noServers')}\n`));
+          console.log(chalk.dim(t('cmd.mcp.addHint')));
           return true;
         }
 
-        console.log(chalk.bold('\nMCP Servers:\n'));
+        console.log(chalk.bold(`\n${t('cmd.mcp.title')}\n`));
         for (const s of servers) {
           console.log(`  ${chalk.green('●')} ${s.name}`);
-          for (const t of s.tools) {
-            console.log(chalk.dim(`    - ${t}`));
+          for (const tool of s.tools) {
+            console.log(chalk.dim(`    - ${tool}`));
           }
         }
         console.log('');
+        return true;
+      },
+    },
+    {
+      name: '/lang',
+      aliases: ['/language', '/locale'],
+      description: 'Change UI language (e.g., /lang ko, /lang en)',
+      handler: async (args, ctx) => {
+        if (!args) {
+          console.log(chalk.cyan(t('cmd.lang.current', getLocaleDisplayName(getLocale()))));
+          console.log(chalk.dim(t('cmd.lang.available')));
+          return true;
+        }
+
+        const code = args.trim().toLowerCase();
+        const supported = getSupportedLocales();
+        if (!supported.includes(code as Locale)) {
+          console.log(chalk.yellow(t('cmd.lang.usage')));
+          console.log(chalk.dim(t('cmd.lang.available')));
+          return true;
+        }
+
+        setLocale(code as Locale);
+
+        // Save to user config
+        try {
+          const home = process.env['HOME'] || process.env['USERPROFILE'] || os.homedir();
+          const settingsPath = path.join(home, '.codi', 'settings.json');
+          let settings: Record<string, unknown> = {};
+          if (fs.existsSync(settingsPath)) {
+            try {
+              settings = JSON.parse(fs.readFileSync(settingsPath, 'utf-8'));
+            } catch {
+              settings = {};
+            }
+          }
+          settings['locale'] = code;
+          const dir = path.dirname(settingsPath);
+          if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+          fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2), 'utf-8');
+        } catch {
+          // Non-fatal
+        }
+
+        // Reload system prompt with new locale
+        ctx.reloadSystemPrompt();
+
+        console.log(chalk.green(`✓ ${t('cmd.lang.changed', getLocaleDisplayName(code as Locale))}`));
         return true;
       },
     },

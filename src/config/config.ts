@@ -8,6 +8,7 @@ export interface CodiConfig {
   model: string;
   maxTokens: number;
   temperature?: number;
+  locale: string;
   apiKeys: {
     anthropic?: string;
     openai?: string;
@@ -28,6 +29,7 @@ export interface CodiConfig {
   sandbox: boolean;
   autoCompactThreshold: number; // 0-1, fraction of context window
   memoryEnabled: boolean;
+  fallbackModels: Array<{ provider: ProviderName; model: string }>;
 }
 
 export interface HookConfig {
@@ -50,6 +52,7 @@ const DEFAULT_CONFIG: CodiConfig = {
   provider: 'openai',
   model: 'gemini-2.5-flash',
   maxTokens: 8192,
+  locale: 'auto',
   apiKeys: {},
   baseUrls: {
     openai: 'https://generativelanguage.googleapis.com/v1beta/openai',
@@ -65,6 +68,7 @@ const DEFAULT_CONFIG: CodiConfig = {
   sandbox: false,
   autoCompactThreshold: 0.7,
   memoryEnabled: true,
+  fallbackModels: [],
 };
 
 export class ConfigManager {
@@ -141,6 +145,8 @@ export class ConfigManager {
         Object.assign(this.config.hooks, value);
       } else if (key === 'mcpServers' && typeof value === 'object' && value !== null) {
         Object.assign(this.config.mcpServers, value);
+      } else if (key === 'fallbackModels' && Array.isArray(value)) {
+        this.config.fallbackModels = value as Array<{ provider: ProviderName; model: string }>;
       } else if (key === 'apiKeys' && typeof value === 'object' && value !== null) {
         Object.assign(this.config.apiKeys, value);
       } else if (key === 'baseUrls' && typeof value === 'object' && value !== null) {

@@ -9,6 +9,7 @@ export interface PromptContext {
   memory?: string;
   gitStatus?: string;
   planMode?: boolean;
+  locale?: string;
 }
 
 const ROLE_DEFINITION = `You are Codi (코디), a terminal-based AI coding agent. You help users with software engineering tasks including writing code, debugging, refactoring, and explaining code. You have access to tools for file manipulation, code search, shell execution, and more.
@@ -388,6 +389,13 @@ Analyze the codebase and create a detailed plan for the user to approve.`);
   // Git status
   if (context.gitStatus) {
     fragments.push(`# Current Git Status\n${context.gitStatus}`);
+  }
+
+  // Locale — instruct LLM to respond in the user's language
+  if (context.locale && context.locale !== 'en') {
+    const localeNames: Record<string, string> = { ko: 'Korean (한국어)' };
+    const langName = localeNames[context.locale] || context.locale;
+    fragments.push(`# Language\nRespond in ${langName}. Use the user's language for all explanations, comments, and messages. Technical terms, code, file paths, and command names should remain in English.`);
   }
 
   return fragments.join('\n\n---\n\n');

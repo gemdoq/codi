@@ -7,6 +7,7 @@ import { execSync } from 'child_process';
 import { edit } from 'external-editor';
 import { KeyBindingManager } from './ui/keybindings.js';
 import { renderPrompt, renderMarkdown, renderError, renderInfo } from './ui/renderer.js';
+import { t } from './i18n/index.js';
 import { statusLine } from './ui/status-line.js';
 import { completer } from './ui/completer.js';
 import { readFileSync } from 'fs';
@@ -194,7 +195,7 @@ export class Repl {
             }
             this.lastInterruptTime = now;
             this.options.onInterrupt();
-            console.log(chalk.dim('\n(Press Ctrl+C again to exit)'));
+            console.log(chalk.dim(`\n${t('repl.ctrlc')}`));
             resolve('');
           };
           const cleanup = () => {
@@ -272,7 +273,7 @@ export class Repl {
       const args = spaceIdx === -1 ? '' : input.slice(spaceIdx + 1).trim();
       const handled = await this.options.onSlashCommand(command, args);
       if (handled) return;
-      console.log(renderError(`Unknown command: ${command}. Type /help for available commands.`));
+      console.log(renderError(t('repl.unknownCmd', command)));
       return;
     }
 
@@ -371,7 +372,7 @@ export class Repl {
     if (this.options.onExit) {
       await this.options.onExit();
     }
-    console.log(chalk.dim('\nGoodbye!\n'));
+    console.log(chalk.dim(`\n${t('repl.goodbye')}\n`));
     process.exit(0);
   }
 
@@ -380,11 +381,12 @@ export class Repl {
     console.log(chalk.cyan.bold('  ╭─────────────────────────────╮'));
     const versionPad = `    Codi (코디) ${getVersion()}`.padEnd(29);
     console.log(chalk.cyan.bold('  │') + chalk.white.bold(versionPad) + chalk.cyan.bold('│'));
-    console.log(chalk.cyan.bold('  │') + chalk.dim('   AI Code Agent for Terminal ') + chalk.cyan.bold('│'));
+    const subtitle = t('repl.welcome.subtitle').padEnd(29).slice(0, 29);
+    console.log(chalk.cyan.bold('  │') + chalk.dim(`   ${subtitle}`) + chalk.cyan.bold('│'));
     console.log(chalk.cyan.bold('  ╰─────────────────────────────╯'));
     console.log('');
-    console.log(chalk.dim('  Type /help for commands, Ctrl+D to quit'));
-    console.log(chalk.dim('  Use \\ at end of line for multiline input'));
+    console.log(chalk.dim(`  ${t('repl.welcome.help')}`));
+    console.log(chalk.dim(`  ${t('repl.welcome.multiline')}`));
     console.log('');
   }
 }
