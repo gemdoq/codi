@@ -154,6 +154,17 @@ export async function agentLoop(
     }
 
     // Check stop reason
+    if (response.stopReason === 'max_tokens') {
+      // Auto-continue: ask LLM to keep writing
+      if (showOutput && !wasStreamed && finalText) {
+        console.log('');
+        console.log(renderAssistantPrefix());
+        console.log(renderMarkdown(finalText));
+      }
+      conversation.addUserMessage(t('agent.continue'));
+      continue;
+    }
+
     if (response.stopReason === 'end_turn' || !response.toolCalls || response.toolCalls.length === 0) {
       // Only render if not already streamed to terminal
       if (showOutput && finalText && !wasStreamed) {
@@ -166,12 +177,6 @@ export async function agentLoop(
         console.log('');
       }
       break;
-    }
-
-    if (response.stopReason === 'max_tokens') {
-      if (showOutput) {
-        console.log(chalk.yellow(`\n⚠ ${t('agent.truncated')}`));
-      }
     }
 
     // Execute tools

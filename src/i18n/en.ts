@@ -156,5 +156,6 @@ export const en: Record<string, string> = {
   'agent.selectModel.invalid': 'Invalid selection.',
   'agent.selectModel.switched': 'Switched to {0}/{1}',
   'agent.selectModel.noModels': 'No models available from registered providers.',
+  'agent.continue': 'Your response was truncated. Please continue from where you left off.',
   'agent.retrying': 'API error ({0}), retrying in {1}s...',
 };

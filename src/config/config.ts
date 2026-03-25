@@ -51,7 +51,7 @@ export interface McpServerConfig {
 const DEFAULT_CONFIG: CodiConfig = {
   provider: 'openai',
   model: 'gemini-2.5-flash',
-  maxTokens: 8192,
+  maxTokens: 16384,
   locale: 'auto',
   apiKeys: {},
   baseUrls: {

@@ -156,5 +156,6 @@ export const ko: Record<string, string> = {
   'agent.selectModel.invalid': '잘못된 선택입니다.',
   'agent.selectModel.switched': '{0}/{1}(으)로 전환했습니다',
   'agent.selectModel.noModels': '등록된 제공자에서 사용 가능한 모델이 없습니다.',
+  'agent.continue': '응답이 잘렸습니다. 끊긴 부분부터 이어서 계속 작성해주세요.',
   'agent.retrying': 'API 오류 ({0}), {1}초 후 재시도...',
 };
