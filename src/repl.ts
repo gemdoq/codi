@@ -41,62 +41,19 @@ export interface ReplOptions {
   onExit?: () => Promise<void>;
 }
 
-// ── CJK display width helpers ────────────────────────────────────────
-
-const ANSI_RE = /\x1B\[[0-9;]*[a-zA-Z]|\x1B\][^\x07]*\x07/g;
-
-function stripAnsi(str: string): string {
-  return str.replace(ANSI_RE, '');
-}
-
-function isFullWidthCodePoint(code: number): boolean {
-  return (
-    (code >= 0x1100 && code <= 0x115F) ||  // Hangul Jamo
-    code === 0x2329 || code === 0x232A ||   // Angle brackets
-    (code >= 0x2E80 && code <= 0x303E) ||   // CJK Radicals Supplement
-    (code >= 0x3040 && code <= 0x33BF) ||   // Hiragana, Katakana, CJK Symbols
-    (code >= 0x3400 && code <= 0x4DBF) ||   // CJK Unified Ext A
-    (code >= 0x4E00 && code <= 0x9FFF) ||   // CJK Unified Ideographs
-    (code >= 0xA960 && code <= 0xA97C) ||   // Hangul Jamo Extended-A
-    (code >= 0xAC00 && code <= 0xD7AF) ||   // Hangul Syllables
-    (code >= 0xD7B0 && code <= 0xD7FF) ||   // Hangul Jamo Extended-B
-    (code >= 0xF900 && code <= 0xFAFF) ||   // CJK Compatibility Ideographs
-    (code >= 0xFE10 && code <= 0xFE19) ||   // Vertical Forms
-    (code >= 0xFE30 && code <= 0xFE6F) ||   // CJK Compatibility Forms
-    (code >= 0xFF01 && code <= 0xFF60) ||   // Fullwidth Forms
-    (code >= 0xFFE0 && code <= 0xFFE6) ||   // Fullwidth Signs
-    (code >= 0x1F300 && code <= 0x1F9FF) || // Emojis (Misc Symbols & Pictographs + Emoticons + etc.)
-    (code >= 0x20000 && code <= 0x2FFFF) || // CJK Unified Ext B-F
-    (code >= 0x30000 && code <= 0x3FFFF)    // CJK Unified Ext G+
-  );
-}
-
-function getDisplayWidth(str: string): number {
-  const clean = stripAnsi(str);
-  let width = 0;
-  for (const ch of clean) {
-    const code = ch.codePointAt(0)!;
-    if (isFullWidthCodePoint(code)) {
-      width += 2;
-    } else if (code >= 0x20) {
-      width += 1;
-    }
-  }
-  return width;
-}
-
 // ── PasteFilter Transform ────────────────────────────────────────────
 
 /**
  * Transform stream that intercepts bracket paste escape sequences.
- * Buffers pasted content and emits it as a single chunk so readline
- * processes it in one event-loop tick, preventing per-character redraws.
+ *
+ * During paste (between ESC[200~ and ESC[201~), sets isPasteActive=true.
+ * After paste ends, pushes the entire buffered content as one chunk,
+ * then emits 'paste-end' so the REPL can do a single _refreshLine.
  */
 class PasteFilter extends Transform {
   private pasteBuf = '';
   public isPasteActive = false;
 
-  // Forward TTY interface so readline treats this as a terminal input
   get isTTY(): boolean { return !!process.stdin.isTTY; }
   setRawMode(mode: boolean): this {
     if (typeof (process.stdin as any).setRawMode === 'function') {
@@ -141,9 +98,6 @@ class PasteFilter extends Transform {
 
 // ── HistoryManager ───────────────────────────────────────────────────
 
-/**
- * Self-managed history that persists to disk on every addition.
- */
 class HistoryManager {
   private entries: string[] = [];
 
@@ -221,7 +175,6 @@ export class Repl {
 
     const historyForReadline = this.history.getForReadline();
 
-    // Bracket paste: pipe stdin through PasteFilter
     this.pasteFilter = new PasteFilter();
     input.pipe(this.pasteFilter);
 
@@ -238,7 +191,6 @@ export class Repl {
       historySize: MAX_HISTORY,
     } as any);
 
-    // Fallback: if readline didn't pick up the history option, inject it directly
     const rlAny = this.rl as any;
     if (!rlAny.history || rlAny.history.length === 0) {
       if (historyForReadline.length > 0) {
@@ -246,112 +198,86 @@ export class Repl {
       }
     }
 
-    // ── Replace readline's _refreshLine with CJK-aware implementation ──
-    // Node.js readline's _refreshLine uses relative cursor movement
-    // ("go up N rows") based on its own width calculation. For Hangul/CJK
-    // wide characters, this calculation drifts and causes ghost prompts.
+    // ── Patch _insertString to suppress ALL output during bracket paste ──
     //
-    // Our replacement tracks the physical cursor row independently
-    // (prevCursorRow) so we always move to the exact correct position.
+    // Root cause of the ghost prompt bug:
+    // readline's _insertString has two code paths:
+    //   (a) cursor at end + same row → directly writes char to output (_writeToOutput)
+    //   (b) cursor in middle OR row changes → calls _refreshLine
+    //
+    // During fast paste, path (a) writes chars directly to the terminal,
+    // causing the terminal to wrap lines. But _refreshLine (path b) tracks
+    // rows via prevRows, which gets out of sync when paste is debounced
+    // or suppressed. This mismatch causes _refreshLine to not go up far
+    // enough, leaving "ghost" duplicate prompts above.
+    //
+    // Fix: during bracket paste, suppress ALL output from _insertString
+    // (both paths). Only update the internal line/cursor state.
+    // After paste ends, one normal _refreshLine draws everything correctly.
+
     const pasteFilter = this.pasteFilter;
-    let prevCursorRow = 0;
-    let refreshScheduled = false;
 
-    // Also fix _getCursorPos and _getDisplayPos used by _moveCursor (arrow keys)
-    rlAny._getDisplayPos = function(str: string) {
-      const cols = this.columns || process.stdout.columns || 80;
-      const width = getDisplayWidth(str);
-      return { rows: Math.floor(width / cols), cols: width % cols };
-    };
+    // Get the Symbol keys for readline's private methods
+    const proto = Object.getPrototypeOf(this.rl);
+    const symbols = Object.getOwnPropertySymbols(proto);
+    const kInsertString = symbols.find(s => s.toString().includes('_insertString'));
+    const kRefreshLine = symbols.find(s => s.toString().includes('RefreshLine') && !s.toString().includes('getDisplay'));
+    const kWriteToOutput = symbols.find(s => s.toString().includes('writeToOutput') || s.toString().includes('WriteToOutput'));
 
-    rlAny._getCursorPos = function() {
-      const cols = this.columns || process.stdout.columns || 80;
-      const beforeCursor = (this._prompt || '') + (this.line || '').slice(0, this.cursor);
-      const width = getDisplayWidth(beforeCursor);
-      return { rows: Math.floor(width / cols), cols: width % cols };
-    };
+    if (kInsertString) {
+      const origInsertString = proto[kInsertString];
 
-    // Track cursor row changes from _moveCursor (arrow keys, home, end)
-    const origMoveCursor = rlAny._moveCursor.bind(rlAny);
-    rlAny._moveCursor = function(dx: number) {
-      origMoveCursor(dx);
-      const pos = this._getCursorPos();
-      prevCursorRow = pos.rows;
-    };
-
-    // Reset tracking when prompt is displayed
-    const origPrompt = rlAny.prompt.bind(rlAny);
-    rlAny.prompt = function(...args: any[]) {
-      prevCursorRow = 0;
-      origPrompt(...args);
-    };
-
-    const doRefresh = () => {
-      const rl = this.rl;
-      if (!rl) return;
-      const r = rl as any;
-      const prompt = r._prompt || '';
-      const line = r.line || '';
-      const fullLine = prompt + line;
-      const cols = r.columns || process.stdout.columns || 80;
-
-      // 1. Move from tracked physical cursor row to row 0 (prompt start)
-      if (prevCursorRow > 0) {
-        output.write(`\x1B[${prevCursorRow}A`);
-      }
-      output.write('\r');       // column 0
-      output.write('\x1B[J');   // clear from cursor to end of screen
-
-      // 2. Write prompt + content using readline's output method
-      r._writeToOutput(fullLine);
-
-      // 3. Calculate where the writing cursor ended up
-      const fullWidth = getDisplayWidth(fullLine);
-      const endRow = Math.floor(fullWidth / cols);
-      const endCol = fullWidth % cols;
-
-      // 4. Calculate where the editing cursor should be
-      const beforeCursor = prompt + line.slice(0, r.cursor);
-      const cursorWidth = getDisplayWidth(beforeCursor);
-      const cursorRow = Math.floor(cursorWidth / cols);
-      const cursorCol = cursorWidth % cols;
-
-      // 5. Move from end-of-content to editing cursor position
-      if (endRow > cursorRow) {
-        output.write(`\x1B[${endRow - cursorRow}A`);
-      }
-      // Handle edge case: if endCol is 0 and text exactly fills last column,
-      // terminal may have wrapped cursor to next line already
-      if (endCol === 0 && fullWidth > 0 && fullWidth % cols === 0) {
-        // Cursor wrapped to next line, need to go up one more
-        output.write('\x1B[1A');
-        if (endRow > cursorRow) {
-          // Already moved up, adjust: go back down one less
+      rlAny[kInsertString] = function(c: string) {
+        if (pasteFilter.isPasteActive) {
+          // During paste: only update internal state, no output at all
+          if (this.cursor < this.line.length) {
+            const beg = this.line.slice(0, this.cursor);
+            const end = this.line.slice(this.cursor);
+            this.line = beg + c + end;
+            this.cursor += c.length;
+          } else {
+            this.line += c;
+            this.cursor += c.length;
+          }
+          return;
         }
-      }
-      output.write(`\x1B[${cursorCol + 1}G`); // absolute column (1-based)
+        // Outside paste: use original behavior
+        origInsertString.call(this, c);
+      };
+    }
 
-      // 6. Track physical cursor row for next refresh
-      prevCursorRow = cursorRow;
-    };
+    // After paste buffer is pushed and processed, schedule one refresh
+    // We detect paste end by watching isPasteActive transition.
+    // Since PasteFilter.push() triggers synchronous readline processing,
+    // isPasteActive is already false after all chars are processed.
+    // We use a microtask to refresh after the current processing completes.
+    if (kRefreshLine) {
+      const origRefreshLine = proto[kRefreshLine];
+      let pendingPasteRefresh = false;
 
-    rlAny._refreshLine = function() {
-      if (pasteFilter.isPasteActive) return;
-      if (!refreshScheduled) {
-        refreshScheduled = true;
-        queueMicrotask(() => {
-          refreshScheduled = false;
-          doRefresh();
-        });
-      }
-    };
+      rlAny[kRefreshLine] = function() {
+        if (pasteFilter.isPasteActive) {
+          // Schedule a refresh for when paste ends
+          if (!pendingPasteRefresh) {
+            pendingPasteRefresh = true;
+            queueMicrotask(() => {
+              pendingPasteRefresh = false;
+              // Reset prevRows because no output was written during paste,
+              // so the physical cursor is still where it was before paste started
+              origRefreshLine.call(this);
+            });
+          }
+          return;
+        }
+        origRefreshLine.call(this);
+      };
+    }
 
-    // Enable bracket paste mode on terminal
+    // Enable bracket paste mode
     if (process.stdin.isTTY) {
       process.stdout.write('\x1B[?2004h');
     }
 
-    // 공유 프롬프트 핸들러 등록 (permission-manager, ask-user가 이것을 사용)
     registerPromptHandler((prompt: string) => {
       if (!this.rl) return Promise.reject(new Error('REPL not running'));
       process.stdout.write(prompt);
