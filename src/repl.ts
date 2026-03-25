@@ -224,53 +224,53 @@ export class Repl {
     const kRefreshLine = symbols.find(s => s.toString().includes('RefreshLine') && !s.toString().includes('getDisplay'));
     const kWriteToOutput = symbols.find(s => s.toString().includes('writeToOutput') || s.toString().includes('WriteToOutput'));
 
+    // Symbol properties on the prototype are getter-only, so use
+    // Object.defineProperty on the instance to override them.
     if (kInsertString) {
       const origInsertString = proto[kInsertString];
 
-      rlAny[kInsertString] = function(c: string) {
-        if (pasteFilter.isPasteActive) {
-          // During paste: only update internal state, no output at all
-          if (this.cursor < this.line.length) {
-            const beg = this.line.slice(0, this.cursor);
-            const end = this.line.slice(this.cursor);
-            this.line = beg + c + end;
-            this.cursor += c.length;
-          } else {
-            this.line += c;
-            this.cursor += c.length;
+      Object.defineProperty(rlAny, kInsertString, {
+        value: function(c: string) {
+          if (pasteFilter.isPasteActive) {
+            if (this.cursor < this.line.length) {
+              const beg = this.line.slice(0, this.cursor);
+              const end = this.line.slice(this.cursor);
+              this.line = beg + c + end;
+              this.cursor += c.length;
+            } else {
+              this.line += c;
+              this.cursor += c.length;
+            }
+            return;
           }
-          return;
-        }
-        // Outside paste: use original behavior
-        origInsertString.call(this, c);
-      };
+          origInsertString.call(this, c);
+        },
+        writable: true,
+        configurable: true,
+      });
     }
 
-    // After paste buffer is pushed and processed, schedule one refresh
-    // We detect paste end by watching isPasteActive transition.
-    // Since PasteFilter.push() triggers synchronous readline processing,
-    // isPasteActive is already false after all chars are processed.
-    // We use a microtask to refresh after the current processing completes.
     if (kRefreshLine) {
       const origRefreshLine = proto[kRefreshLine];
       let pendingPasteRefresh = false;
 
-      rlAny[kRefreshLine] = function() {
-        if (pasteFilter.isPasteActive) {
-          // Schedule a refresh for when paste ends
-          if (!pendingPasteRefresh) {
-            pendingPasteRefresh = true;
-            queueMicrotask(() => {
-              pendingPasteRefresh = false;
-              // Reset prevRows because no output was written during paste,
-              // so the physical cursor is still where it was before paste started
-              origRefreshLine.call(this);
-            });
+      Object.defineProperty(rlAny, kRefreshLine, {
+        value: function() {
+          if (pasteFilter.isPasteActive) {
+            if (!pendingPasteRefresh) {
+              pendingPasteRefresh = true;
+              queueMicrotask(() => {
+                pendingPasteRefresh = false;
+                origRefreshLine.call(this);
+              });
+            }
+            return;
           }
-          return;
-        }
-        origRefreshLine.call(this);
-      };
+          origRefreshLine.call(this);
+        },
+        writable: true,
+        configurable: true,
+      });
     }
 
     // Enable bracket paste mode
