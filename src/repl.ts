@@ -41,6 +41,52 @@ export interface ReplOptions {
   onExit?: () => Promise<void>;
 }
 
+// ── CJK display width helpers ────────────────────────────────────────
+
+const ANSI_RE = /\x1B\[[0-9;]*[a-zA-Z]|\x1B\][^\x07]*\x07/g;
+
+function stripAnsi(str: string): string {
+  return str.replace(ANSI_RE, '');
+}
+
+function isFullWidthCodePoint(code: number): boolean {
+  return (
+    (code >= 0x1100 && code <= 0x115F) ||  // Hangul Jamo
+    code === 0x2329 || code === 0x232A ||   // Angle brackets
+    (code >= 0x2E80 && code <= 0x303E) ||   // CJK Radicals Supplement
+    (code >= 0x3040 && code <= 0x33BF) ||   // Hiragana, Katakana, CJK Symbols
+    (code >= 0x3400 && code <= 0x4DBF) ||   // CJK Unified Ext A
+    (code >= 0x4E00 && code <= 0x9FFF) ||   // CJK Unified Ideographs
+    (code >= 0xA960 && code <= 0xA97C) ||   // Hangul Jamo Extended-A
+    (code >= 0xAC00 && code <= 0xD7AF) ||   // Hangul Syllables
+    (code >= 0xD7B0 && code <= 0xD7FF) ||   // Hangul Jamo Extended-B
+    (code >= 0xF900 && code <= 0xFAFF) ||   // CJK Compatibility Ideographs
+    (code >= 0xFE10 && code <= 0xFE19) ||   // Vertical Forms
+    (code >= 0xFE30 && code <= 0xFE6F) ||   // CJK Compatibility Forms
+    (code >= 0xFF01 && code <= 0xFF60) ||   // Fullwidth Forms
+    (code >= 0xFFE0 && code <= 0xFFE6) ||   // Fullwidth Signs
+    (code >= 0x1F300 && code <= 0x1F9FF) || // Emojis (Misc Symbols & Pictographs + Emoticons + etc.)
+    (code >= 0x20000 && code <= 0x2FFFF) || // CJK Unified Ext B-F
+    (code >= 0x30000 && code <= 0x3FFFF)    // CJK Unified Ext G+
+  );
+}
+
+function getDisplayWidth(str: string): number {
+  const clean = stripAnsi(str);
+  let width = 0;
+  for (const ch of clean) {
+    const code = ch.codePointAt(0)!;
+    if (isFullWidthCodePoint(code)) {
+      width += 2;
+    } else if (code >= 0x20) {
+      width += 1;
+    }
+  }
+  return width;
+}
+
+// ── PasteFilter Transform ────────────────────────────────────────────
+
 /**
  * Transform stream that intercepts bracket paste escape sequences.
  * Buffers pasted content and emits it as a single chunk so readline
@@ -48,7 +94,7 @@ export interface ReplOptions {
  */
 class PasteFilter extends Transform {
   private pasteBuf = '';
-  private isPasting = false;
+  public isPasteActive = false;
 
   // Forward TTY interface so readline treats this as a terminal input
   get isTTY(): boolean { return !!process.stdin.isTTY; }
@@ -63,14 +109,14 @@ class PasteFilter extends Transform {
     let data = chunk.toString('utf-8');
 
     while (data.length > 0) {
-      if (!this.isPasting) {
+      if (!this.isPasteActive) {
         const idx = data.indexOf('\x1B[200~');
         if (idx < 0) {
           this.push(data);
           data = '';
         } else {
           if (idx > 0) this.push(data.slice(0, idx));
-          this.isPasting = true;
+          this.isPasteActive = true;
           this.pasteBuf = '';
           data = data.slice(idx + 6);
         }
@@ -81,8 +127,7 @@ class PasteFilter extends Transform {
           data = '';
         } else {
           this.pasteBuf += data.slice(0, idx);
-          this.isPasting = false;
-          // Normalize line endings; keep newlines for multiline support
+          this.isPasteActive = false;
           const cleaned = this.pasteBuf.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
           if (cleaned) this.push(cleaned);
           this.pasteBuf = '';
@@ -93,6 +138,8 @@ class PasteFilter extends Transform {
     callback();
   }
 }
+
+// ── HistoryManager ───────────────────────────────────────────────────
 
 /**
  * Self-managed history that persists to disk on every addition.
@@ -135,13 +182,12 @@ class HistoryManager {
     this.save();
   }
 
-  /**
-   * Get entries in readline's expected format: newest first.
-   */
   getForReadline(): string[] {
     return [...this.entries].reverse();
   }
 }
+
+// ── Repl ─────────────────────────────────────────────────────────────
 
 export class Repl {
   private rl: readline.Interface | null = null;
@@ -173,11 +219,9 @@ export class Repl {
   async start(): Promise<void> {
     this.running = true;
 
-    // readline expects history in newest-first order
     const historyForReadline = this.history.getForReadline();
 
-    // Bracket paste: pipe stdin through PasteFilter to buffer pasted content
-    // so readline receives it as a single chunk (prevents per-character redraw)
+    // Bracket paste: pipe stdin through PasteFilter
     this.pasteFilter = new PasteFilter();
     input.pipe(this.pasteFilter);
 
@@ -201,6 +245,47 @@ export class Repl {
         rlAny.history = [...historyForReadline];
       }
     }
+
+    // ── Patch readline internals for correct CJK width calculation ──
+    // Node.js readline can miscalculate row positions for wide characters
+    // (Hangul, CJK ideographs, etc.), causing ghost prompt duplication
+    // on long wrapped lines. Override the position helpers.
+    const pasteFilter = this.pasteFilter;
+
+    rlAny._getDisplayPos = function(str: string) {
+      const cols = this.columns || process.stdout.columns || 80;
+      const width = getDisplayWidth(str);
+      return {
+        rows: Math.floor(width / cols),
+        cols: width % cols,
+      };
+    };
+
+    rlAny._getCursorPos = function() {
+      const cols = this.columns || process.stdout.columns || 80;
+      const beforeCursor = (this._prompt || '') + (this.line || '').slice(0, this.cursor);
+      const width = getDisplayWidth(beforeCursor);
+      return {
+        rows: Math.floor(width / cols),
+        cols: width % cols,
+      };
+    };
+
+    // Debounce _refreshLine: collapse rapid-fire calls (e.g. during paste)
+    // into a single render at the end of the current microtask.
+    const origRefresh: () => void = rlAny._refreshLine.bind(rlAny);
+    let refreshScheduled = false;
+
+    rlAny._refreshLine = function() {
+      if (pasteFilter.isPasteActive) return; // Completely suppress during paste
+      if (!refreshScheduled) {
+        refreshScheduled = true;
+        queueMicrotask(() => {
+          refreshScheduled = false;
+          origRefresh();
+        });
+      }
+    };
 
     // Enable bracket paste mode on terminal
     if (process.stdin.isTTY) {
@@ -264,10 +349,8 @@ export class Repl {
         const trimmed = line.trim();
         if (!trimmed) continue;
 
-        // Save to our persistent history (writes to disk immediately)
         this.history.add(trimmed);
 
-        // Clean up readline's in-session history: remove slash commands and duplicates
         {
           const rlHist: string[] | undefined = rlAny.history;
           if (rlHist && rlHist.length > 0) {
@@ -279,7 +362,6 @@ export class Repl {
           }
         }
 
-        // Multiline: line ending with \
         if (trimmed.endsWith('\\')) {
           this.multilineBuffer.push(trimmed.slice(0, -1));
           this.inMultiline = true;
@@ -305,10 +387,6 @@ export class Repl {
         }
       }
     }
-
-    if (process.stdin.isTTY) {
-      process.stdout.write('\x1B[?2004l'); // Disable bracket paste
-    }
   }
 
   private async processInput(input: string): Promise<void> {
@@ -318,7 +396,6 @@ export class Repl {
       return;
     }
 
-    // Slash commands
     if (input.startsWith('/')) {
       const spaceIdx = input.indexOf(' ');
       const command = spaceIdx === -1 ? input : input.slice(0, spaceIdx);
@@ -329,7 +406,6 @@ export class Repl {
       return;
     }
 
-    // Bang prefix → direct shell execution
     if (input.startsWith('!')) {
       const cmd = input.slice(1).trim();
       if (!cmd) return;
@@ -352,7 +428,6 @@ export class Repl {
       return;
     }
 
-    // @ prefix → file reference
     const IMAGE_EXTS = new Set(['.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp', '.svg']);
     const MIME_MAP: Record<string, string> = {
       '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg',
@@ -412,7 +487,7 @@ export class Repl {
     this.running = false;
     unregisterPromptHandler();
     if (process.stdin.isTTY) {
-      process.stdout.write('\x1B[?2004l'); // Disable bracket paste
+      process.stdout.write('\x1B[?2004l');
     }
     if (this.pasteFilter) {
       input.unpipe(this.pasteFilter);
