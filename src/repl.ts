@@ -143,31 +143,9 @@ export class Repl {
       }
     }
 
-    // Setup bracket paste mode detection (skip on Windows — breaks Ctrl+V paste)
-    if (process.stdin.isTTY && os.platform() !== 'win32') {
-      process.stdout.write('\x1B[?2004h'); // Enable bracket paste
-    }
-
-    // Windows: intercept Ctrl+V (raw 0x16) and read from clipboard via PowerShell
-    if (os.platform() === 'win32' && process.stdin.isTTY) {
-      process.stdin.on('keypress', (_str: string, key: { name?: string; ctrl?: boolean; sequence?: string }) => {
-        if (key && key.sequence === '\x16') {
-          try {
-            const clip = execSync(
-              'powershell -NoProfile -command "[Console]::OutputEncoding = [System.Text.Encoding]::UTF8; Get-Clipboard"',
-              { encoding: 'utf-8', timeout: 5000, env: { ...process.env } }
-            ).replace(/\r\n/g, '\n').replace(/\n$/, '');
-            if (clip && this.rl) {
-              const firstNewline = clip.indexOf('\n');
-              if (firstNewline === -1) {
-                this.rl.write(clip);
-              } else {
-                this.rl.write(clip.replace(/\n/g, '\\'));
-              }
-            }
-          } catch {}
-        }
-      });
+    // Enable bracket paste mode (modern terminals including Windows Terminal support it)
+    if (process.stdin.isTTY) {
+      process.stdout.write('\x1B[?2004h');
     }
 
     // 공유 프롬프트 핸들러 등록 (permission-manager, ask-user가 이것을 사용)
@@ -269,7 +247,7 @@ export class Repl {
       }
     }
 
-    if (process.stdin.isTTY && os.platform() !== 'win32') {
+    if (process.stdin.isTTY) {
       process.stdout.write('\x1B[?2004l'); // Disable bracket paste
     }
   }
