@@ -71,6 +71,21 @@ function isFullWidthCodePoint(code: number): boolean {
   );
 }
 
+/** Display width of a single character */
+function charWidth(ch: string): number {
+  const code = ch.codePointAt(0)!;
+  if (code < 0x20) return 0;
+  return isFullWidthCodePoint(code) ? 2 : 1;
+}
+
+/** Display width of a string (CJK-aware, strip ANSI) */
+function stringWidth(str: string): number {
+  const clean = stripAnsi(str);
+  let w = 0;
+  for (const ch of clean) w += charWidth(ch);
+  return w;
+}
+
 /**
  * Calculate display position matching Node.js readline's _getDisplayPos exactly.
  * Includes CJK end-of-line padding: when a 2-width character would land on the
@@ -166,14 +181,17 @@ class HistoryManager {
   private load(): void {
     try {
       const content = fs.readFileSync(HISTORY_FILE, 'utf-8');
-      this.entries = content.split('\n').filter(Boolean).slice(-MAX_HISTORY);
+      this.entries = content.split('\n').filter(Boolean)
+        .map(line => line.replace(/\\n/g, '\n'))
+        .slice(-MAX_HISTORY);
     } catch { this.entries = []; }
   }
 
   save(): void {
     try {
       fs.mkdirSync(HISTORY_DIR, { recursive: true });
-      fs.writeFileSync(HISTORY_FILE, this.entries.join('\n') + '\n', 'utf-8');
+      const lines = this.entries.map(e => e.replace(/\n/g, '\\n'));
+      fs.writeFileSync(HISTORY_FILE, lines.join('\n') + '\n', 'utf-8');
     } catch { /* non-fatal */ }
   }
 
@@ -192,18 +210,33 @@ class HistoryManager {
   getForReadline(): string[] { return [...this.entries].reverse(); }
 }
 
+// ── Key type for _ttyWrite ──────────────────────────────────────────
+
+interface Key {
+  name?: string;
+  ctrl?: boolean;
+  meta?: boolean;
+  shift?: boolean;
+  sequence?: string;
+}
+
 // ── Repl ─────────────────────────────────────────────────────────────
 
 export class Repl {
   private rl: readline.Interface | null = null;
   private keyBindings = new KeyBindingManager();
   private running = false;
-  private multilineBuffer: string[] = [];
-  private inMultiline = false;
   private pasteFilter: PasteFilter | null = null;
   private options: ReplOptions;
   private lastInterruptTime = 0;
   private history = new HistoryManager();
+
+  // Multi-line editing state
+  private mlLines: string[] = [''];
+  private mlLineIdx = 0;
+  private mlColIdx = 0;
+  private mlActive = false; // true when lines.length > 1
+  private mlTotalRows = 0;  // total display rows of the rendered multi-line block
 
   constructor(options: ReplOptions) {
     this.options = options;
@@ -216,6 +249,138 @@ export class Repl {
       handler: () => { process.stdout.write('\x1B[2J\x1B[0f'); },
       description: 'Clear screen',
     });
+  }
+
+  /** Get the prompt string for a given line index */
+  private getLinePrompt(lineIdx: number): string {
+    return lineIdx === 0 ? renderPrompt() : chalk.dim('... ');
+  }
+
+  /** Get the plain (no ANSI) prompt width for a given line index */
+  private getLinePromptWidth(lineIdx: number): number {
+    return lineIdx === 0 ? stringWidth(renderPrompt()) : 4; // "... " = 4
+  }
+
+  /**
+   * Render the entire multi-line input block from scratch.
+   * Moves cursor to correct position at the end.
+   */
+  private refreshMultiline(): void {
+    if (!this.rl) return;
+    const cols = process.stdout.columns || 80;
+
+    // Move cursor to the beginning of the block (row 0 of our content)
+    if (this.mlTotalRows > 0) {
+      // Move up to the top of the previously rendered block
+      process.stdout.write(`\x1B[${this.mlTotalRows}A`);
+    }
+    // Move to column 0
+    process.stdout.write('\r');
+    // Clear from here to end of screen
+    process.stdout.write('\x1B[J');
+
+    // Render all lines
+    let totalRows = 0;
+    for (let i = 0; i < this.mlLines.length; i++) {
+      const prompt = this.getLinePrompt(i);
+      const fullLine = prompt + this.mlLine(i);
+
+      process.stdout.write(fullLine);
+
+      // Calculate how many display rows this line takes
+      const displayPos = calcDisplayPos(fullLine, cols);
+      const lineRows = displayPos.rows + (displayPos.cols > 0 ? 1 : 1);
+      totalRows += lineRows;
+
+      // Write newline after each line except the last
+      if (i < this.mlLines.length - 1) {
+        process.stdout.write('\n');
+      }
+    }
+
+    // Calculate total rows (0-indexed from top)
+    // We need the total rows occupied to know how far up to go next time
+    let totalDisplayRows = 0;
+    for (let i = 0; i < this.mlLines.length; i++) {
+      const prompt = this.getLinePrompt(i);
+      const fullLine = prompt + this.mlLine(i);
+      const dp = calcDisplayPos(fullLine, cols);
+      totalDisplayRows += dp.rows; // rows above the last row of this line
+      if (i < this.mlLines.length - 1) {
+        totalDisplayRows += 1; // the newline
+      }
+    }
+    this.mlTotalRows = totalDisplayRows;
+
+    // Now position cursor at the correct location
+    // First, figure out where the cursor should be (mlLineIdx, mlColIdx)
+    const cursorPrompt = this.getLinePrompt(this.mlLineIdx);
+    const cursorContent = cursorPrompt + this.mlLine(this.mlLineIdx).slice(0, this.mlColIdx);
+    const cursorDP = calcDisplayPos(cursorContent, cols);
+
+    // How many rows from the current position (end of last line) to the cursor line?
+    // Current position = end of last line
+    const lastPrompt = this.getLinePrompt(this.mlLines.length - 1);
+    const lastFull = lastPrompt + this.mlLine(this.mlLines.length - 1);
+    const lastDP = calcDisplayPos(lastFull, cols);
+
+    // Rows from end of last line to bottom of block = 0 (we're there)
+    // Rows from top of block to cursor:
+    let rowsFromTopToCursor = 0;
+    for (let i = 0; i < this.mlLineIdx; i++) {
+      const p = this.getLinePrompt(i);
+      const fl = p + this.mlLine(i);
+      const dp = calcDisplayPos(fl, cols);
+      rowsFromTopToCursor += dp.rows + 1; // +1 for the newline
+    }
+    rowsFromTopToCursor += cursorDP.rows;
+
+    // Rows from top of block to end of last line:
+    let rowsFromTopToEnd = 0;
+    for (let i = 0; i < this.mlLines.length - 1; i++) {
+      const p = this.getLinePrompt(i);
+      const fl = p + this.mlLine(i);
+      const dp = calcDisplayPos(fl, cols);
+      rowsFromTopToEnd += dp.rows + 1;
+    }
+    rowsFromTopToEnd += lastDP.rows;
+
+    const rowsUp = rowsFromTopToEnd - rowsFromTopToCursor;
+    if (rowsUp > 0) {
+      process.stdout.write(`\x1B[${rowsUp}A`);
+    }
+    // Move to correct column
+    process.stdout.write(`\r\x1B[${cursorDP.cols}C`);
+  }
+
+  /** Safely get a line from mlLines (returns '' for out of bounds) */
+  private mlLine(idx: number): string {
+    return this.mlLines[idx] ?? '';
+  }
+
+  /** Reset multi-line state to single empty line */
+  private mlReset(): void {
+    this.mlLines = [''];
+    this.mlLineIdx = 0;
+    this.mlColIdx = 0;
+    this.mlActive = false;
+    this.mlTotalRows = 0;
+  }
+
+  /** Sync readline's line/cursor from our multi-line state (for the current line) */
+  private mlSyncToReadline(): void {
+    if (!this.rl) return;
+    const r = this.rl as any;
+    r.line = this.mlLine(this.mlLineIdx);
+    r.cursor = this.mlColIdx;
+  }
+
+  /** Sync our multi-line state from readline (after readline processes a key) */
+  private mlSyncFromReadline(): void {
+    if (!this.rl) return;
+    const r = this.rl as any;
+    this.mlLines[this.mlLineIdx] = r.line;
+    this.mlColIdx = r.cursor;
   }
 
   async start(): Promise<void> {
@@ -246,10 +411,6 @@ export class Repl {
     }
 
     // ── Override getCursorPos with CJK-aware calculation ──
-    // readline's _insertString calls this.getCursorPos() to detect row changes.
-    // If the row calculation is wrong, _refreshLine is skipped when it shouldn't be,
-    // causing prevRows to drift from the physical cursor → ghost prompts.
-    // This override matches Node's _getDisplayPos exactly (including CJK end-of-line padding).
     rlAny.getCursorPos = function() {
       const cols = this.columns || process.stdout.columns || 80;
       const prompt = this._prompt || '';
@@ -257,20 +418,296 @@ export class Repl {
       return calcDisplayPos(beforeCursor, cols);
     };
 
+    // ── Override _ttyWrite for multi-line editing ──
+    const origTtyWrite = rlAny._ttyWrite.bind(rlAny);
+    const self = this;
+
+    rlAny._ttyWrite = function(s: string, key: Key) {
+      if (!key) key = {};
+
+      // Ctrl+C in multi-line → cancel and reset
+      if (key.name === 'c' && key.ctrl && self.mlActive) {
+        // Clear the multi-line display
+        if (self.mlTotalRows > 0) {
+          process.stdout.write(`\x1B[${self.mlTotalRows}A`);
+        }
+        process.stdout.write('\r\x1B[J');
+        self.mlReset();
+        // Reset readline state
+        this.line = '';
+        this.cursor = 0;
+        this._refreshLine();
+        return;
+      }
+
+      // Ctrl+Enter / Alt+Enter / Shift+Enter → insert newline
+      const isNewline =
+        (key.name === 'return' && (key.ctrl || key.meta || key.shift)) ||
+        (key.name === 'j' && key.ctrl); // Ctrl+J = newline on most terminals
+
+      if (isNewline) {
+        if (!self.mlActive) {
+          // Enter multi-line mode: take current readline content as line 0
+          self.mlLines = [this.line || ''];
+          self.mlColIdx = this.cursor || 0;
+          self.mlLineIdx = 0;
+          self.mlActive = true;
+
+          // Calculate initial mlTotalRows from the current single-line display
+          const cols = process.stdout.columns || 80;
+          const prompt = self.getLinePrompt(0);
+          const dp = calcDisplayPos(prompt + self.mlLine(0), cols);
+          self.mlTotalRows = dp.rows;
+        } else {
+          self.mlSyncFromReadline();
+        }
+
+        // Split current line at cursor
+        const currentLine = self.mlLine(self.mlLineIdx);
+        const before = currentLine.slice(0, self.mlColIdx);
+        const after = currentLine.slice(self.mlColIdx);
+
+        self.mlLines[self.mlLineIdx] = before;
+        self.mlLines.splice(self.mlLineIdx + 1, 0, after);
+        self.mlLineIdx++;
+        self.mlColIdx = 0;
+
+        // Update readline to show the new current line
+        this.line = after;
+        this.cursor = 0;
+        this._prompt = self.getLinePrompt(self.mlLineIdx);
+
+        self.refreshMultiline();
+        return;
+      }
+
+      // Enter (no modifier) → submit
+      if (key.name === 'return' && !key.ctrl && !key.meta && !key.shift) {
+        if (self.mlActive) {
+          self.mlSyncFromReadline();
+          const fullText = self.mlLines.join('\n');
+
+          // Clear multi-line display and move to after it
+          // (Already at cursor position — move to end first)
+          const cols = process.stdout.columns || 80;
+          let rowsFromTopToEnd = 0;
+          for (let i = 0; i < self.mlLines.length - 1; i++) {
+            const p = self.getLinePrompt(i);
+            const fl = p + self.mlLine(i);
+            const dp = calcDisplayPos(fl, cols);
+            rowsFromTopToEnd += dp.rows + 1;
+          }
+          const lastP = self.getLinePrompt(self.mlLines.length - 1);
+          const lastFL = lastP + self.mlLine(self.mlLines.length - 1);
+          const lastDP = calcDisplayPos(lastFL, cols);
+          rowsFromTopToEnd += lastDP.rows;
+
+          // Move cursor to current position in block first
+          let rowsFromTopToCursor = 0;
+          for (let i = 0; i < self.mlLineIdx; i++) {
+            const p = self.getLinePrompt(i);
+            const fl = p + self.mlLine(i);
+            const dp = calcDisplayPos(fl, cols);
+            rowsFromTopToCursor += dp.rows + 1;
+          }
+          const curP = self.getLinePrompt(self.mlLineIdx);
+          const curContent = curP + self.mlLine(self.mlLineIdx).slice(0, self.mlColIdx);
+          const curDP = calcDisplayPos(curContent, cols);
+          rowsFromTopToCursor += curDP.rows;
+
+          const downToEnd = rowsFromTopToEnd - rowsFromTopToCursor;
+          if (downToEnd > 0) {
+            process.stdout.write(`\x1B[${downToEnd}B`);
+          }
+
+          process.stdout.write('\n');
+          self.mlReset();
+
+          // Emit the full multi-line text as a line event
+          this.line = '';
+          this.cursor = 0;
+          this._prompt = renderPrompt();
+          this.emit('line', fullText);
+          return;
+        }
+        // Single line — let readline handle normally
+        origTtyWrite(s, key);
+        return;
+      }
+
+      // Up arrow
+      if (key.name === 'up' && !key.ctrl && !key.meta) {
+        if (self.mlActive && self.mlLineIdx > 0) {
+          self.mlSyncFromReadline();
+          self.mlLineIdx--;
+          // Try to keep similar column position
+          self.mlColIdx = Math.min(self.mlColIdx, self.mlLine(self.mlLineIdx).length);
+          self.mlSyncToReadline();
+          this._prompt = self.getLinePrompt(self.mlLineIdx);
+          self.refreshMultiline();
+          return;
+        }
+        // At first line or single-line → history (let readline handle)
+        if (self.mlActive) {
+          // Already at line 0 in multi-line — don't navigate history
+          return;
+        }
+        origTtyWrite(s, key);
+        return;
+      }
+
+      // Down arrow
+      if (key.name === 'down' && !key.ctrl && !key.meta) {
+        if (self.mlActive && self.mlLineIdx < self.mlLines.length - 1) {
+          self.mlSyncFromReadline();
+          self.mlLineIdx++;
+          self.mlColIdx = Math.min(self.mlColIdx, self.mlLine(self.mlLineIdx).length);
+          self.mlSyncToReadline();
+          this._prompt = self.getLinePrompt(self.mlLineIdx);
+          self.refreshMultiline();
+          return;
+        }
+        // At last line or single-line → history (let readline handle)
+        if (self.mlActive) {
+          // Already at last line — don't navigate history
+          return;
+        }
+        origTtyWrite(s, key);
+        return;
+      }
+
+      // Backspace at beginning of line in multi-line → merge with previous line
+      if ((key.name === 'backspace') && self.mlActive) {
+        self.mlSyncFromReadline();
+        if (self.mlColIdx === 0 && self.mlLineIdx > 0) {
+          const prevLine = self.mlLine(self.mlLineIdx - 1);
+          const curLine = self.mlLine(self.mlLineIdx);
+          self.mlLines[self.mlLineIdx - 1] = prevLine + curLine;
+          self.mlLines.splice(self.mlLineIdx, 1);
+          self.mlLineIdx--;
+          self.mlColIdx = prevLine.length;
+
+          if (self.mlLines.length === 1) {
+            self.mlActive = false;
+          }
+
+          self.mlSyncToReadline();
+          this._prompt = self.getLinePrompt(self.mlLineIdx);
+          self.refreshMultiline();
+          return;
+        }
+        // Normal backspace within line — let readline handle, then sync back
+        origTtyWrite(s, key);
+        self.mlSyncFromReadline();
+        self.refreshMultiline();
+        return;
+      }
+
+      // Delete at end of line in multi-line → merge with next line
+      if ((key.name === 'delete') && self.mlActive) {
+        self.mlSyncFromReadline();
+        if (self.mlColIdx === self.mlLine(self.mlLineIdx).length && self.mlLineIdx < self.mlLines.length - 1) {
+          const curLine = self.mlLine(self.mlLineIdx);
+          const nextLine = self.mlLine(self.mlLineIdx + 1);
+          self.mlLines[self.mlLineIdx] = curLine + nextLine;
+          self.mlLines.splice(self.mlLineIdx + 1, 1);
+
+          if (self.mlLines.length === 1) {
+            self.mlActive = false;
+          }
+
+          self.mlSyncToReadline();
+          this._prompt = self.getLinePrompt(self.mlLineIdx);
+          self.refreshMultiline();
+          return;
+        }
+        origTtyWrite(s, key);
+        self.mlSyncFromReadline();
+        self.refreshMultiline();
+        return;
+      }
+
+      // All other keys in multi-line mode
+      if (self.mlActive) {
+        origTtyWrite(s, key);
+        self.mlSyncFromReadline();
+        self.refreshMultiline();
+        return;
+      }
+
+      // Single-line mode — pass through to readline normally
+      origTtyWrite(s, key);
+    };
+
     // ── Handle paste: inject directly into readline state ──
-    // PasteFilter emits 'paste-complete' instead of pushing to readline.
-    // We directly set rl.line/cursor and do one _refreshLine.
-    // This avoids per-character processing and keeps prevRows in sync.
     this.pasteFilter.on('paste-complete', (text: string) => {
       if (!this.rl) return;
       const r = this.rl as any;
-      // Insert at cursor position
-      const before = r.line.slice(0, r.cursor);
-      const after = r.line.slice(r.cursor);
-      r.line = before + text + after;
-      r.cursor += text.length;
-      // Single clean refresh — prevRows is correct because no intermediate output happened
-      r._refreshLine();
+
+      const pasteLines = text.split('\n');
+
+      if (pasteLines.length === 1) {
+        // Single line paste — simple inject
+        if (this.mlActive) {
+          this.mlSyncFromReadline();
+          const cur = this.mlLine(this.mlLineIdx);
+          const before = cur.slice(0, this.mlColIdx);
+          const after = cur.slice(this.mlColIdx);
+          this.mlLines[this.mlLineIdx] = before + (pasteLines[0] ?? '') + after;
+          this.mlColIdx += (pasteLines[0] ?? '').length;
+          this.mlSyncToReadline();
+          this.refreshMultiline();
+        } else {
+          const before = r.line.slice(0, r.cursor);
+          const after = r.line.slice(r.cursor);
+          const pl0 = pasteLines[0] ?? '';
+          r.line = before + pl0 + after;
+          r.cursor += pl0.length;
+          r._refreshLine();
+        }
+        return;
+      }
+
+      // Multi-line paste
+      if (!this.mlActive) {
+        // Enter multi-line mode
+        this.mlLines = [r.line || ''];
+        this.mlColIdx = r.cursor || 0;
+        this.mlLineIdx = 0;
+        this.mlActive = true;
+
+        const cols = process.stdout.columns || 80;
+        const prompt = this.getLinePrompt(0);
+        const dp = calcDisplayPos(prompt + this.mlLine(0), cols);
+        this.mlTotalRows = dp.rows;
+      } else {
+        this.mlSyncFromReadline();
+      }
+
+      // Insert paste lines at cursor
+      const curLine = this.mlLine(this.mlLineIdx);
+      const before = curLine.slice(0, this.mlColIdx);
+      const after = curLine.slice(this.mlColIdx);
+
+      // First paste line merges with content before cursor
+      this.mlLines[this.mlLineIdx] = before + (pasteLines[0] ?? '');
+
+      // Middle paste lines are inserted as new lines
+      for (let i = 1; i < pasteLines.length - 1; i++) {
+        this.mlLines.splice(this.mlLineIdx + i, 0, pasteLines[i] ?? '');
+      }
+
+      // Last paste line merges with content after cursor
+      const lastPasteIdx = this.mlLineIdx + pasteLines.length - 1;
+      const lastPasteLine = pasteLines[pasteLines.length - 1] ?? '';
+      this.mlLines.splice(lastPasteIdx, 0, lastPasteLine + after);
+
+      this.mlLineIdx = lastPasteIdx;
+      this.mlColIdx = lastPasteLine.length;
+
+      this.mlSyncToReadline();
+      r._prompt = this.getLinePrompt(this.mlLineIdx);
+      this.refreshMultiline();
     });
 
     // Enable bracket paste mode
@@ -299,6 +736,7 @@ export class Repl {
 
         this.rl.setPrompt(renderPrompt());
         this.rl.prompt();
+        this.mlReset();
 
         const line = await new Promise<string>((resolve, reject) => {
           const onLine = (data: string) => { cleanup(); resolve(data); };
@@ -341,24 +779,7 @@ export class Repl {
           }
         }
 
-        if (trimmed.endsWith('\\')) {
-          this.multilineBuffer.push(trimmed.slice(0, -1));
-          this.inMultiline = true;
-          this.rl.setPrompt(chalk.dim('... '));
-          continue;
-        }
-
-        let fullInput: string;
-        if (this.inMultiline) {
-          this.multilineBuffer.push(trimmed);
-          fullInput = this.multilineBuffer.join('\n');
-          this.multilineBuffer = [];
-          this.inMultiline = false;
-        } else {
-          fullInput = trimmed;
-        }
-
-        await this.processInput(fullInput);
+        await this.processInput(trimmed);
       } catch (err) {
         if (err instanceof Error && err.message === 'closed') {
           await this.gracefulExit();

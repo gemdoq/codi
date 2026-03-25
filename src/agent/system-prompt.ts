@@ -66,7 +66,7 @@ Users can type these commands while using Codi:
 # Input Prefixes
 - ! command : Execute a shell command directly (e.g., ! git status)
 - @file.ts : Attach file content to your message
-- \\ at end of line : Continue typing on next line (multiline input)`;
+- Ctrl+Enter : Insert newline for multiline input`;
 
 const CONVERSATION_RULES = `# Conversation Rules
 - When a user asks "how do I..." or "what should I type...", give a clear EXPLANATION with example prompts they can type.
