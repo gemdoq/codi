@@ -246,43 +246,102 @@ export class Repl {
       }
     }
 
-    // ── Patch readline internals for correct CJK width calculation ──
-    // Node.js readline can miscalculate row positions for wide characters
-    // (Hangul, CJK ideographs, etc.), causing ghost prompt duplication
-    // on long wrapped lines. Override the position helpers.
+    // ── Replace readline's _refreshLine with CJK-aware implementation ──
+    // Node.js readline's _refreshLine uses relative cursor movement
+    // ("go up N rows") based on its own width calculation. For Hangul/CJK
+    // wide characters, this calculation drifts and causes ghost prompts.
+    //
+    // Our replacement tracks the physical cursor row independently
+    // (prevCursorRow) so we always move to the exact correct position.
     const pasteFilter = this.pasteFilter;
+    let prevCursorRow = 0;
+    let refreshScheduled = false;
 
+    // Also fix _getCursorPos and _getDisplayPos used by _moveCursor (arrow keys)
     rlAny._getDisplayPos = function(str: string) {
       const cols = this.columns || process.stdout.columns || 80;
       const width = getDisplayWidth(str);
-      return {
-        rows: Math.floor(width / cols),
-        cols: width % cols,
-      };
+      return { rows: Math.floor(width / cols), cols: width % cols };
     };
 
     rlAny._getCursorPos = function() {
       const cols = this.columns || process.stdout.columns || 80;
       const beforeCursor = (this._prompt || '') + (this.line || '').slice(0, this.cursor);
       const width = getDisplayWidth(beforeCursor);
-      return {
-        rows: Math.floor(width / cols),
-        cols: width % cols,
-      };
+      return { rows: Math.floor(width / cols), cols: width % cols };
     };
 
-    // Debounce _refreshLine: collapse rapid-fire calls (e.g. during paste)
-    // into a single render at the end of the current microtask.
-    const origRefresh: () => void = rlAny._refreshLine.bind(rlAny);
-    let refreshScheduled = false;
+    // Track cursor row changes from _moveCursor (arrow keys, home, end)
+    const origMoveCursor = rlAny._moveCursor.bind(rlAny);
+    rlAny._moveCursor = function(dx: number) {
+      origMoveCursor(dx);
+      const pos = this._getCursorPos();
+      prevCursorRow = pos.rows;
+    };
+
+    // Reset tracking when prompt is displayed
+    const origPrompt = rlAny.prompt.bind(rlAny);
+    rlAny.prompt = function(...args: any[]) {
+      prevCursorRow = 0;
+      origPrompt(...args);
+    };
+
+    const doRefresh = () => {
+      const rl = this.rl;
+      if (!rl) return;
+      const r = rl as any;
+      const prompt = r._prompt || '';
+      const line = r.line || '';
+      const fullLine = prompt + line;
+      const cols = r.columns || process.stdout.columns || 80;
+
+      // 1. Move from tracked physical cursor row to row 0 (prompt start)
+      if (prevCursorRow > 0) {
+        output.write(`\x1B[${prevCursorRow}A`);
+      }
+      output.write('\r');       // column 0
+      output.write('\x1B[J');   // clear from cursor to end of screen
+
+      // 2. Write prompt + content using readline's output method
+      r._writeToOutput(fullLine);
+
+      // 3. Calculate where the writing cursor ended up
+      const fullWidth = getDisplayWidth(fullLine);
+      const endRow = Math.floor(fullWidth / cols);
+      const endCol = fullWidth % cols;
+
+      // 4. Calculate where the editing cursor should be
+      const beforeCursor = prompt + line.slice(0, r.cursor);
+      const cursorWidth = getDisplayWidth(beforeCursor);
+      const cursorRow = Math.floor(cursorWidth / cols);
+      const cursorCol = cursorWidth % cols;
+
+      // 5. Move from end-of-content to editing cursor position
+      if (endRow > cursorRow) {
+        output.write(`\x1B[${endRow - cursorRow}A`);
+      }
+      // Handle edge case: if endCol is 0 and text exactly fills last column,
+      // terminal may have wrapped cursor to next line already
+      if (endCol === 0 && fullWidth > 0 && fullWidth % cols === 0) {
+        // Cursor wrapped to next line, need to go up one more
+        output.write('\x1B[1A');
+        if (endRow > cursorRow) {
+          // Already moved up, adjust: go back down one less
+        }
+      }
+      output.write(`\x1B[${cursorCol + 1}G`); // absolute column (1-based)
+
+      // 6. Track physical cursor row for next refresh
+      prevCursorRow = cursorRow;
+    };
 
     rlAny._refreshLine = function() {
-      if (pasteFilter.isPasteActive) return; // Completely suppress during paste
+      if (pasteFilter.isPasteActive) return;
       if (!refreshScheduled) {
         refreshScheduled = true;
         queueMicrotask(() => {
           refreshScheduled = false;
-          origRefresh();
+          doRefresh();
         });
       }
     };
