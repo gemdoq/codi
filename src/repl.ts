@@ -41,14 +41,73 @@ export interface ReplOptions {
   onExit?: () => Promise<void>;
 }
 
+// ── CJK display width (matching Node.js readline's _getDisplayPos) ───
+
+const ANSI_RE = /\x1B\[[0-9;]*[a-zA-Z]|\x1B\][^\x07]*\x07/g;
+
+function stripAnsi(str: string): string {
+  return str.replace(ANSI_RE, '');
+}
+
+function isFullWidthCodePoint(code: number): boolean {
+  return (
+    (code >= 0x1100 && code <= 0x115F) ||
+    code === 0x2329 || code === 0x232A ||
+    (code >= 0x2E80 && code <= 0x303E) ||
+    (code >= 0x3040 && code <= 0x33BF) ||
+    (code >= 0x3400 && code <= 0x4DBF) ||
+    (code >= 0x4E00 && code <= 0x9FFF) ||
+    (code >= 0xA960 && code <= 0xA97C) ||
+    (code >= 0xAC00 && code <= 0xD7AF) ||
+    (code >= 0xD7B0 && code <= 0xD7FF) ||
+    (code >= 0xF900 && code <= 0xFAFF) ||
+    (code >= 0xFE10 && code <= 0xFE19) ||
+    (code >= 0xFE30 && code <= 0xFE6F) ||
+    (code >= 0xFF01 && code <= 0xFF60) ||
+    (code >= 0xFFE0 && code <= 0xFFE6) ||
+    (code >= 0x1F300 && code <= 0x1F9FF) ||
+    (code >= 0x20000 && code <= 0x2FFFF) ||
+    (code >= 0x30000 && code <= 0x3FFFF)
+  );
+}
+
+/**
+ * Calculate display position matching Node.js readline's _getDisplayPos exactly.
+ * Includes CJK end-of-line padding: when a 2-width character would land on the
+ * last column, it wraps to the next line with 1 column of padding.
+ */
+function calcDisplayPos(str: string, cols: number): { rows: number; cols: number } {
+  const clean = stripAnsi(str);
+  let offset = 0;
+  for (const ch of clean) {
+    if (ch === '\n') {
+      offset = (Math.ceil(offset / cols) || 1) * cols;
+      continue;
+    }
+    if (ch === '\t') {
+      offset += 8 - (offset % 8);
+      continue;
+    }
+    const code = ch.codePointAt(0)!;
+    if (code < 0x20) continue;
+    const w = isFullWidthCodePoint(code) ? 2 : 1;
+    if (w === 2 && (offset + 1) % cols === 0) {
+      offset++; // padding: 2-width char at last column wraps to next line
+    }
+    offset += w;
+  }
+  const c = offset % cols;
+  const r = (offset - c) / cols;
+  return { rows: r, cols: c };
+}
+
 // ── PasteFilter Transform ────────────────────────────────────────────
 
 /**
  * Transform stream that intercepts bracket paste escape sequences.
- *
- * During paste (between ESC[200~ and ESC[201~), sets isPasteActive=true.
- * After paste ends, pushes the entire buffered content as one chunk,
- * then emits 'paste-end' so the REPL can do a single _refreshLine.
+ * During paste, content is NOT pushed to readline. Instead, 'paste-complete'
+ * is emitted with the buffered text so the REPL can inject it directly
+ * into readline's state and do a single clean refresh.
  */
 class PasteFilter extends Transform {
   private pasteBuf = '';
@@ -86,7 +145,8 @@ class PasteFilter extends Transform {
           this.pasteBuf += data.slice(0, idx);
           this.isPasteActive = false;
           const cleaned = this.pasteBuf.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
-          if (cleaned) this.push(cleaned);
+          // Don't push to readline — emit event for direct injection
+          if (cleaned) this.emit('paste-complete', cleaned);
           this.pasteBuf = '';
           data = data.slice(idx + 6);
         }
@@ -101,26 +161,20 @@ class PasteFilter extends Transform {
 class HistoryManager {
   private entries: string[] = [];
 
-  constructor() {
-    this.load();
-  }
+  constructor() { this.load(); }
 
   private load(): void {
     try {
       const content = fs.readFileSync(HISTORY_FILE, 'utf-8');
       this.entries = content.split('\n').filter(Boolean).slice(-MAX_HISTORY);
-    } catch {
-      this.entries = [];
-    }
+    } catch { this.entries = []; }
   }
 
   save(): void {
     try {
       fs.mkdirSync(HISTORY_DIR, { recursive: true });
       fs.writeFileSync(HISTORY_FILE, this.entries.join('\n') + '\n', 'utf-8');
-    } catch {
-      // non-fatal
-    }
+    } catch { /* non-fatal */ }
   }
 
   add(line: string): void {
@@ -128,7 +182,6 @@ class HistoryManager {
     if (!trimmed) return;
     if (trimmed.startsWith('/')) return;
     if (this.entries.length > 0 && this.entries[this.entries.length - 1] === trimmed) return;
-
     this.entries.push(trimmed);
     if (this.entries.length > MAX_HISTORY) {
       this.entries = this.entries.slice(-MAX_HISTORY);
@@ -136,9 +189,7 @@ class HistoryManager {
     this.save();
   }
 
-  getForReadline(): string[] {
-    return [...this.entries].reverse();
-  }
+  getForReadline(): string[] { return [...this.entries].reverse(); }
 }
 
 // ── Repl ─────────────────────────────────────────────────────────────
@@ -161,18 +212,14 @@ export class Repl {
 
   private setupKeyBindings(): void {
     this.keyBindings.register({
-      key: 'l',
-      ctrl: true,
-      handler: () => {
-        process.stdout.write('\x1B[2J\x1B[0f');
-      },
+      key: 'l', ctrl: true,
+      handler: () => { process.stdout.write('\x1B[2J\x1B[0f'); },
       description: 'Clear screen',
     });
   }
 
   async start(): Promise<void> {
     this.running = true;
-
     const historyForReadline = this.history.getForReadline();
 
     this.pasteFilter = new PasteFilter();
@@ -198,62 +245,33 @@ export class Repl {
       }
     }
 
-    // ── Patch _insertString to suppress ALL output during bracket paste ──
-    //
-    // Root cause of the ghost prompt bug:
-    // readline's _insertString has two code paths:
-    //   (a) cursor at end + same row → directly writes char to output (_writeToOutput)
-    //   (b) cursor in middle OR row changes → calls _refreshLine
-    //
-    // During fast paste, path (a) writes chars directly to the terminal,
-    // causing the terminal to wrap lines. But _refreshLine (path b) tracks
-    // rows via prevRows, which gets out of sync when paste is debounced
-    // or suppressed. This mismatch causes _refreshLine to not go up far
-    // enough, leaving "ghost" duplicate prompts above.
-    //
-    // Fix: during bracket paste, suppress ALL output from _insertString
-    // (both paths). Only update the internal line/cursor state.
-    // After paste ends, one normal _refreshLine draws everything correctly.
-
-    const pasteFilter = this.pasteFilter;
-
-    // Override via string keys (writable: true on prototype).
-    // Symbol keys are getter-only + non-configurable, but the string-named
-    // aliases (_insertString, _refreshLine) are plain writable properties.
-    const origInsertString = rlAny._insertString;
-    const origRefreshLine = rlAny._refreshLine;
-    let pendingPasteRefresh = false;
-
-    rlAny._insertString = function(c: string) {
-      if (pasteFilter.isPasteActive) {
-        // During paste: only update internal state, zero output
-        if (this.cursor < this.line.length) {
-          const beg = this.line.slice(0, this.cursor);
-          const end = this.line.slice(this.cursor);
-          this.line = beg + c + end;
-          this.cursor += c.length;
-        } else {
-          this.line += c;
-          this.cursor += c.length;
-        }
-        return;
-      }
-      origInsertString.call(this, c);
+    // ── Override getCursorPos with CJK-aware calculation ──
+    // readline's _insertString calls this.getCursorPos() to detect row changes.
+    // If the row calculation is wrong, _refreshLine is skipped when it shouldn't be,
+    // causing prevRows to drift from the physical cursor → ghost prompts.
+    // This override matches Node's _getDisplayPos exactly (including CJK end-of-line padding).
+    rlAny.getCursorPos = function() {
+      const cols = this.columns || process.stdout.columns || 80;
+      const prompt = this._prompt || '';
+      const beforeCursor = prompt + (this.line || '').slice(0, this.cursor);
+      return calcDisplayPos(beforeCursor, cols);
     };
 
-    rlAny._refreshLine = function() {
-      if (pasteFilter.isPasteActive) {
-        if (!pendingPasteRefresh) {
-          pendingPasteRefresh = true;
-          queueMicrotask(() => {
-            pendingPasteRefresh = false;
-            origRefreshLine.call(this);
-          });
-        }
-        return;
-      }
-      origRefreshLine.call(this);
-    };
+    // ── Handle paste: inject directly into readline state ──
+    // PasteFilter emits 'paste-complete' instead of pushing to readline.
+    // We directly set rl.line/cursor and do one _refreshLine.
+    // This avoids per-character processing and keeps prevRows in sync.
+    this.pasteFilter.on('paste-complete', (text: string) => {
+      if (!this.rl) return;
+      const r = this.rl as any;
+      // Insert at cursor position
+      const before = r.line.slice(0, r.cursor);
+      const after = r.line.slice(r.cursor);
+      r.line = before + text + after;
+      r.cursor += text.length;
+      // Single clean refresh — prevRows is correct because no intermediate output happened
+      r._refreshLine();
+    });
 
     // Enable bracket paste mode
     if (process.stdin.isTTY) {
@@ -283,14 +301,8 @@ export class Repl {
         this.rl.prompt();
 
         const line = await new Promise<string>((resolve, reject) => {
-          const onLine = (data: string) => {
-            cleanup();
-            resolve(data);
-          };
-          const onClose = () => {
-            cleanup();
-            reject(new Error('closed'));
-          };
+          const onLine = (data: string) => { cleanup(); resolve(data); };
+          const onClose = () => { cleanup(); reject(new Error('closed')); };
           const onSigint = () => {
             cleanup();
             const now = Date.now();
@@ -445,9 +457,7 @@ export class Repl {
     try {
       const text = edit('', { postfix: '.md' });
       return text.trim() || null;
-    } catch {
-      return null;
-    }
+    } catch { return null; }
   }
 
   stop(): void {
