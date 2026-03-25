@@ -40,6 +40,64 @@ export interface ReplOptions {
   onExit?: () => Promise<void>;
 }
 
+/**
+ * Self-managed history that doesn't rely on readline's internal history array.
+ * Persists to disk on every addition so no data is lost on crash/SIGTERM.
+ */
+class HistoryManager {
+  private entries: string[] = [];
+  private browseIndex = -1;
+
+  constructor() {
+    this.load();
+  }
+
+  private load(): void {
+    try {
+      const content = fs.readFileSync(HISTORY_FILE, 'utf-8');
+      this.entries = content.split('\n').filter(Boolean).slice(-MAX_HISTORY);
+    } catch {
+      this.entries = [];
+    }
+  }
+
+  save(): void {
+    try {
+      fs.mkdirSync(HISTORY_DIR, { recursive: true });
+      fs.writeFileSync(HISTORY_FILE, this.entries.join('\n') + '\n', 'utf-8');
+    } catch {
+      // non-fatal
+    }
+  }
+
+  add(line: string): void {
+    const trimmed = line.trim();
+    if (!trimmed) return;
+    // Skip slash commands
+    if (trimmed.startsWith('/')) return;
+    // Skip duplicates (same as last entry)
+    if (this.entries.length > 0 && this.entries[this.entries.length - 1] === trimmed) return;
+
+    this.entries.push(trimmed);
+    // Trim to max
+    if (this.entries.length > MAX_HISTORY) {
+      this.entries = this.entries.slice(-MAX_HISTORY);
+    }
+    // Save immediately so history survives crashes
+    this.save();
+    this.resetBrowse();
+  }
+
+  /** Get all entries (oldest first) for loading into readline. */
+  getAll(): string[] {
+    return [...this.entries];
+  }
+
+  resetBrowse(): void {
+    this.browseIndex = -1;
+  }
+}
+
 export class Repl {
   private rl: readline.Interface | null = null;
   private keyBindings = new KeyBindingManager();
@@ -49,6 +107,7 @@ export class Repl {
   private pasteMode = false;
   private options: ReplOptions;
   private lastInterruptTime = 0;
+  private history = new HistoryManager();
 
   constructor(options: ReplOptions) {
     this.options = options;
@@ -66,41 +125,10 @@ export class Repl {
     });
   }
 
-  private loadHistory(): string[] {
-    try {
-      const content = fs.readFileSync(HISTORY_FILE, 'utf-8');
-      return content.split('\n').filter(Boolean).slice(-MAX_HISTORY);
-    } catch {
-      // 파일이 없거나 읽기 실패 시 빈 히스토리
-      return [];
-    }
-  }
-
-  private saveHistory(): void {
-    if (!this.rl) return;
-    try {
-      // readline.history는 최신순(역순)이므로 reverse하여 시간순으로 저장
-      const rlAny = this.rl as any;
-      const history: string[] = rlAny.history ?? [];
-      const entries = history.slice(0, MAX_HISTORY).reverse();
-      fs.mkdirSync(HISTORY_DIR, { recursive: true });
-      fs.writeFileSync(HISTORY_FILE, entries.join('\n') + '\n', 'utf-8');
-    } catch {
-      // 히스토리 저장 실패는 무시
-    }
-  }
-
-  private shouldSaveToHistory(line: string): boolean {
-    const trimmed = line.trim();
-    if (!trimmed) return false;
-    if (trimmed.startsWith('/')) return false;
-    return true;
-  }
-
   async start(): Promise<void> {
     this.running = true;
 
-    const loadedHistory = this.loadHistory();
+    const loadedHistory = this.history.getAll();
 
     this.rl = readline.createInterface({
       input,
@@ -112,10 +140,14 @@ export class Repl {
       historySize: MAX_HISTORY,
     } as any);
 
-    // readline/promises에서 history 옵션이 무시될 수 있으므로 직접 설정
+    // readline/promises may ignore the history option — inject directly
     const rlAny = this.rl as any;
-    if (rlAny.history && loadedHistory.length > 0) {
-      // history 배열은 최신순(역순)으로 저장됨
+    if (loadedHistory.length > 0) {
+      // Ensure history array exists
+      if (!rlAny.history) {
+        rlAny.history = [];
+      }
+      // readline stores history in reverse order (newest first)
       rlAny.history.length = 0;
       for (let i = loadedHistory.length - 1; i >= 0; i--) {
         rlAny.history.push(loadedHistory[i]);
@@ -137,13 +169,10 @@ export class Repl {
               { encoding: 'utf-8', timeout: 5000, env: { ...process.env } }
             ).replace(/\r\n/g, '\n').replace(/\n$/, '');
             if (clip && this.rl) {
-              // For multiline paste, only take the first line into readline
-              // and append the rest as continuation
               const firstNewline = clip.indexOf('\n');
               if (firstNewline === -1) {
                 this.rl.write(clip);
               } else {
-                // Write first line, then user can press Enter
                 this.rl.write(clip.replace(/\n/g, '\\'));
               }
             }
@@ -153,7 +182,6 @@ export class Repl {
     }
 
     // 공유 프롬프트 핸들러 등록 (permission-manager, ask-user가 이것을 사용)
-    // rl.question() 대신 직접 line 이벤트를 사용하여 중복 에코 방지
     registerPromptHandler((prompt: string) => {
       if (!this.rl) return Promise.reject(new Error('REPL not running'));
       process.stdout.write(prompt);
@@ -211,16 +239,23 @@ export class Repl {
         const trimmed = line.trim();
         if (!trimmed) continue;
 
-        // 히스토리 필터링: 슬래시 커맨드/빈 줄 제거 + 연속 중복 제거
+        // Add to our self-managed history (saves to disk immediately)
+        this.history.add(trimmed);
+
+        // Also sync to readline's internal history for up-arrow during this session
         {
           const rlAny = this.rl as any;
-          const hist: string[] | undefined = rlAny.history;
-          if (hist && hist.length > 0) {
-            // readline은 입력을 history[0]에 자동 추가함
-            if (!this.shouldSaveToHistory(trimmed)) {
-              hist.shift(); // 저장하면 안 되는 항목 제거
-            } else if (hist.length > 1 && hist[0] === hist[1]) {
-              hist.shift(); // 연속 중복 제거
+          if (rlAny.history) {
+            // readline auto-adds to history[0], but our filtering may differ.
+            // We let readline handle in-session history naturally.
+            // Just remove slash commands and duplicates from readline's copy.
+            const hist: string[] = rlAny.history;
+            if (hist.length > 0) {
+              if (trimmed.startsWith('/') || !trimmed) {
+                hist.shift();
+              } else if (hist.length > 1 && hist[0] === hist[1]) {
+                hist.shift();
+              }
             }
           }
         }
@@ -337,7 +372,6 @@ export class Repl {
     }
 
     if (hasImages) {
-      // Send as ContentBlock[] so LLM receives actual image data
       const blocks: ContentBlock[] = [
         { type: 'text', text: message.trim() },
         ...imageBlocks,
@@ -367,7 +401,8 @@ export class Repl {
   }
 
   async gracefulExit(): Promise<void> {
-    this.saveHistory();
+    // History is already saved on each input, but save once more for safety
+    this.history.save();
     this.stop();
     if (this.options.onExit) {
       await this.options.onExit();
