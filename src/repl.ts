@@ -1,4 +1,4 @@
-import * as readline from 'node:readline/promises';
+import * as readline from 'node:readline';
 import { stdin as input, stdout as output } from 'process';
 import * as os from 'os';
 import * as fs from 'fs';
@@ -41,12 +41,10 @@ export interface ReplOptions {
 }
 
 /**
- * Self-managed history that doesn't rely on readline's internal history array.
- * Persists to disk on every addition so no data is lost on crash/SIGTERM.
+ * Self-managed history that persists to disk on every addition.
  */
 class HistoryManager {
   private entries: string[] = [];
-  private browseIndex = -1;
 
   constructor() {
     this.load();
@@ -73,28 +71,21 @@ class HistoryManager {
   add(line: string): void {
     const trimmed = line.trim();
     if (!trimmed) return;
-    // Skip slash commands
     if (trimmed.startsWith('/')) return;
-    // Skip duplicates (same as last entry)
     if (this.entries.length > 0 && this.entries[this.entries.length - 1] === trimmed) return;
 
     this.entries.push(trimmed);
-    // Trim to max
     if (this.entries.length > MAX_HISTORY) {
       this.entries = this.entries.slice(-MAX_HISTORY);
     }
-    // Save immediately so history survives crashes
     this.save();
-    this.resetBrowse();
   }
 
-  /** Get all entries (oldest first) for loading into readline. */
-  getAll(): string[] {
-    return [...this.entries];
-  }
-
-  resetBrowse(): void {
-    this.browseIndex = -1;
+  /**
+   * Get entries in readline's expected format: newest first.
+   */
+  getForReadline(): string[] {
+    return [...this.entries].reverse();
   }
 }
 
@@ -128,29 +119,27 @@ export class Repl {
   async start(): Promise<void> {
     this.running = true;
 
-    const loadedHistory = this.history.getAll();
+    // readline expects history in newest-first order
+    const historyForReadline = this.history.getForReadline();
 
     this.rl = readline.createInterface({
       input,
       output,
       prompt: renderPrompt(),
-      completer: (line: string) => completer(line),
+      completer: (line: string, cb: (err: null, result: [string[], string]) => void) => {
+        const result = completer(line);
+        cb(null, result);
+      },
       terminal: true,
-      history: loadedHistory,
+      history: historyForReadline,
       historySize: MAX_HISTORY,
     } as any);
 
-    // readline/promises may ignore the history option — inject directly
+    // Fallback: if readline didn't pick up the history option, inject it directly
     const rlAny = this.rl as any;
-    if (loadedHistory.length > 0) {
-      // Ensure history array exists
-      if (!rlAny.history) {
-        rlAny.history = [];
-      }
-      // readline stores history in reverse order (newest first)
-      rlAny.history.length = 0;
-      for (let i = loadedHistory.length - 1; i >= 0; i--) {
-        rlAny.history.push(loadedHistory[i]);
+    if (!rlAny.history || rlAny.history.length === 0) {
+      if (historyForReadline.length > 0) {
+        rlAny.history = [...historyForReadline];
       }
     }
 
@@ -216,7 +205,6 @@ export class Repl {
           const onSigint = () => {
             cleanup();
             const now = Date.now();
-            // Double Ctrl+C within 2 seconds → exit
             if (now - this.lastInterruptTime < 2000) {
               this.gracefulExit().catch(() => process.exit(1));
               return;
@@ -239,23 +227,17 @@ export class Repl {
         const trimmed = line.trim();
         if (!trimmed) continue;
 
-        // Add to our self-managed history (saves to disk immediately)
+        // Save to our persistent history (writes to disk immediately)
         this.history.add(trimmed);
 
-        // Also sync to readline's internal history for up-arrow during this session
+        // Clean up readline's in-session history: remove slash commands and duplicates
         {
-          const rlAny = this.rl as any;
-          if (rlAny.history) {
-            // readline auto-adds to history[0], but our filtering may differ.
-            // We let readline handle in-session history naturally.
-            // Just remove slash commands and duplicates from readline's copy.
-            const hist: string[] = rlAny.history;
-            if (hist.length > 0) {
-              if (trimmed.startsWith('/') || !trimmed) {
-                hist.shift();
-              } else if (hist.length > 1 && hist[0] === hist[1]) {
-                hist.shift();
-              }
+          const rlHist: string[] | undefined = rlAny.history;
+          if (rlHist && rlHist.length > 0) {
+            if (trimmed.startsWith('/') || !trimmed) {
+              rlHist.shift();
+            } else if (rlHist.length > 1 && rlHist[0] === rlHist[1]) {
+              rlHist.shift();
             }
           }
         }
@@ -281,7 +263,6 @@ export class Repl {
         await this.processInput(fullInput);
       } catch (err) {
         if (err instanceof Error && err.message === 'closed') {
-          // Ctrl+D or readline closed
           await this.gracefulExit();
           return;
         }
@@ -294,7 +275,6 @@ export class Repl {
   }
 
   private async processInput(input: string): Promise<void> {
-    // Direct exit commands (without slash)
     const lower = input.toLowerCase();
     if (lower === 'exit' || lower === 'quit' || lower === 'q') {
       await this.gracefulExit();
@@ -335,7 +315,7 @@ export class Repl {
       return;
     }
 
-    // @ prefix → file reference (prepend file content or image as ContentBlock[])
+    // @ prefix → file reference
     const IMAGE_EXTS = new Set(['.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp', '.svg']);
     const MIME_MAP: Record<string, string> = {
       '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg',
@@ -401,7 +381,6 @@ export class Repl {
   }
 
   async gracefulExit(): Promise<void> {
-    // History is already saved on each input, but save once more for safety
     this.history.save();
     this.stop();
     if (this.options.onExit) {
