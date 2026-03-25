@@ -217,61 +217,43 @@ export class Repl {
 
     const pasteFilter = this.pasteFilter;
 
-    // Get the Symbol keys for readline's private methods
-    const proto = Object.getPrototypeOf(this.rl);
-    const symbols = Object.getOwnPropertySymbols(proto);
-    const kInsertString = symbols.find(s => s.toString().includes('_insertString'));
-    const kRefreshLine = symbols.find(s => s.toString().includes('RefreshLine') && !s.toString().includes('getDisplay'));
-    const kWriteToOutput = symbols.find(s => s.toString().includes('writeToOutput') || s.toString().includes('WriteToOutput'));
+    // Override via string keys (writable: true on prototype).
+    // Symbol keys are getter-only + non-configurable, but the string-named
+    // aliases (_insertString, _refreshLine) are plain writable properties.
+    const origInsertString = rlAny._insertString;
+    const origRefreshLine = rlAny._refreshLine;
+    let pendingPasteRefresh = false;
 
-    // Symbol properties on the prototype are getter-only, so use
-    // Object.defineProperty on the instance to override them.
-    if (kInsertString) {
-      const origInsertString = proto[kInsertString];
+    rlAny._insertString = function(c: string) {
+      if (pasteFilter.isPasteActive) {
+        // During paste: only update internal state, zero output
+        if (this.cursor < this.line.length) {
+          const beg = this.line.slice(0, this.cursor);
+          const end = this.line.slice(this.cursor);
+          this.line = beg + c + end;
+          this.cursor += c.length;
+        } else {
+          this.line += c;
+          this.cursor += c.length;
+        }
+        return;
+      }
+      origInsertString.call(this, c);
+    };
 
-      Object.defineProperty(rlAny, kInsertString, {
-        value: function(c: string) {
-          if (pasteFilter.isPasteActive) {
-            if (this.cursor < this.line.length) {
-              const beg = this.line.slice(0, this.cursor);
-              const end = this.line.slice(this.cursor);
-              this.line = beg + c + end;
-              this.cursor += c.length;
-            } else {
-              this.line += c;
-              this.cursor += c.length;
-            }
-            return;
-          }
-          origInsertString.call(this, c);
-        },
-        writable: true,
-        configurable: true,
-      });
-    }
-
-    if (kRefreshLine) {
-      const origRefreshLine = proto[kRefreshLine];
-      let pendingPasteRefresh = false;
-
-      Object.defineProperty(rlAny, kRefreshLine, {
-        value: function() {
-          if (pasteFilter.isPasteActive) {
-            if (!pendingPasteRefresh) {
-              pendingPasteRefresh = true;
-              queueMicrotask(() => {
-                pendingPasteRefresh = false;
-                origRefreshLine.call(this);
-              });
-            }
-            return;
-          }
-          origRefreshLine.call(this);
-        },
-        writable: true,
-        configurable: true,
-      });
-    }
+    rlAny._refreshLine = function() {
+      if (pasteFilter.isPasteActive) {
+        if (!pendingPasteRefresh) {
+          pendingPasteRefresh = true;
+          queueMicrotask(() => {
+            pendingPasteRefresh = false;
+            origRefreshLine.call(this);
+          });
+        }
+        return;
+      }
+      origRefreshLine.call(this);
+    };
 
     // Enable bracket paste mode
     if (process.stdin.isTTY) {
