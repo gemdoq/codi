@@ -1,5 +1,6 @@
 import * as readline from 'node:readline';
 import { stdin as input, stdout as output } from 'process';
+import { Transform, type TransformCallback } from 'stream';
 import * as os from 'os';
 import * as fs from 'fs';
 import chalk from 'chalk';
@@ -38,6 +39,59 @@ export interface ReplOptions {
   onSlashCommand: (command: string, args: string) => Promise<boolean>;
   onInterrupt: () => void;
   onExit?: () => Promise<void>;
+}
+
+/**
+ * Transform stream that intercepts bracket paste escape sequences.
+ * Buffers pasted content and emits it as a single chunk so readline
+ * processes it in one event-loop tick, preventing per-character redraws.
+ */
+class PasteFilter extends Transform {
+  private pasteBuf = '';
+  private isPasting = false;
+
+  // Forward TTY interface so readline treats this as a terminal input
+  get isTTY(): boolean { return !!process.stdin.isTTY; }
+  setRawMode(mode: boolean): this {
+    if (typeof (process.stdin as any).setRawMode === 'function') {
+      (process.stdin as any).setRawMode(mode);
+    }
+    return this;
+  }
+
+  _transform(chunk: Buffer, _encoding: string, callback: TransformCallback): void {
+    let data = chunk.toString('utf-8');
+
+    while (data.length > 0) {
+      if (!this.isPasting) {
+        const idx = data.indexOf('\x1B[200~');
+        if (idx < 0) {
+          this.push(data);
+          data = '';
+        } else {
+          if (idx > 0) this.push(data.slice(0, idx));
+          this.isPasting = true;
+          this.pasteBuf = '';
+          data = data.slice(idx + 6);
+        }
+      } else {
+        const idx = data.indexOf('\x1B[201~');
+        if (idx < 0) {
+          this.pasteBuf += data;
+          data = '';
+        } else {
+          this.pasteBuf += data.slice(0, idx);
+          this.isPasting = false;
+          // Normalize line endings; keep newlines for multiline support
+          const cleaned = this.pasteBuf.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+          if (cleaned) this.push(cleaned);
+          this.pasteBuf = '';
+          data = data.slice(idx + 6);
+        }
+      }
+    }
+    callback();
+  }
 }
 
 /**
@@ -95,7 +149,7 @@ export class Repl {
   private running = false;
   private multilineBuffer: string[] = [];
   private inMultiline = false;
-  private pasteMode = false;
+  private pasteFilter: PasteFilter | null = null;
   private options: ReplOptions;
   private lastInterruptTime = 0;
   private history = new HistoryManager();
@@ -122,8 +176,13 @@ export class Repl {
     // readline expects history in newest-first order
     const historyForReadline = this.history.getForReadline();
 
+    // Bracket paste: pipe stdin through PasteFilter to buffer pasted content
+    // so readline receives it as a single chunk (prevents per-character redraw)
+    this.pasteFilter = new PasteFilter();
+    input.pipe(this.pasteFilter);
+
     this.rl = readline.createInterface({
-      input,
+      input: this.pasteFilter as any,
       output,
       prompt: renderPrompt(),
       completer: (line: string, cb: (err: null, result: [string[], string]) => void) => {
@@ -143,7 +202,7 @@ export class Repl {
       }
     }
 
-    // Enable bracket paste mode (modern terminals including Windows Terminal support it)
+    // Enable bracket paste mode on terminal
     if (process.stdin.isTTY) {
       process.stdout.write('\x1B[?2004h');
     }
@@ -352,6 +411,14 @@ export class Repl {
   stop(): void {
     this.running = false;
     unregisterPromptHandler();
+    if (process.stdin.isTTY) {
+      process.stdout.write('\x1B[?2004l'); // Disable bracket paste
+    }
+    if (this.pasteFilter) {
+      input.unpipe(this.pasteFilter);
+      this.pasteFilter.destroy();
+      this.pasteFilter = null;
+    }
     if (this.rl) {
       this.rl.close();
       this.rl = null;
