@@ -27,6 +27,34 @@ export interface ConfigRequirement {
   repair: (rl: readline.Interface) => Promise<Record<string, unknown>>;
 }
 
+// ── Helpers ─────────────────────────────────────────────────────────
+
+/**
+ * Read raw settings.json to check if a field was explicitly set by the user
+ * (as opposed to filled in by DEFAULT_CONFIG).
+ */
+function readRawSettings(): Record<string, unknown> {
+  const home = process.env['HOME'] || process.env['USERPROFILE'] || os.homedir();
+  const paths = [
+    path.join(home, '.codi', 'settings.json'),
+    path.join(process.cwd(), '.codi', 'settings.json'),
+    path.join(process.cwd(), '.codi', 'settings.local.json'),
+  ];
+
+  const merged: Record<string, unknown> = {};
+  for (const p of paths) {
+    try {
+      if (fs.existsSync(p)) {
+        const content = JSON.parse(fs.readFileSync(p, 'utf-8'));
+        Object.assign(merged, content);
+      }
+    } catch {
+      // skip invalid files
+    }
+  }
+  return merged;
+}
+
 // ── Required Fields ─────────────────────────────────────────────────
 
 const VALID_LOCALES = new Set(['auto', ...getSupportedLocales()]);
@@ -35,8 +63,10 @@ export const REQUIRED_FIELDS: ConfigRequirement[] = [
   {
     id: 'locale',
     priority: 0,
-    isSatisfied: (config) => {
-      return typeof config.locale === 'string' && config.locale !== '' && VALID_LOCALES.has(config.locale);
+    isSatisfied: (_config) => {
+      // Check raw settings file, not merged config (which has default 'auto')
+      const raw = readRawSettings();
+      return typeof raw['locale'] === 'string' && raw['locale'] !== '' && VALID_LOCALES.has(raw['locale']);
     },
     repair: async (rl) => {
       // Locale prompt is always bilingual (we don't know the user's language yet)
