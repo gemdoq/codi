@@ -236,7 +236,7 @@ export class Repl {
   private mlLineIdx = 0;
   private mlColIdx = 0;
   private mlActive = false; // true when lines.length > 1
-  private mlTotalRows = 0;  // total display rows of the rendered multi-line block
+  private mlCursorRow = 0;  // cursor's row offset from top of the block (for correct move-up)
   private mlLastNewlineAt = 0; // timestamp of last newline insertion (to suppress trailing \r)
 
   constructor(options: ReplOptions) {
@@ -270,88 +270,57 @@ export class Repl {
     if (!this.rl) return;
     const cols = process.stdout.columns || 80;
 
-    // Move cursor to the beginning of the block (row 0 of our content)
-    if (this.mlTotalRows > 0) {
-      // Move up to the top of the previously rendered block
-      process.stdout.write(`\x1B[${this.mlTotalRows}A`);
+    // Step 1: Move cursor to the TOP of the block
+    // mlCursorRow = how many rows below the top the cursor currently sits
+    if (this.mlCursorRow > 0) {
+      process.stdout.write(`\x1B[${this.mlCursorRow}A`);
     }
-    // Move to column 0
-    process.stdout.write('\r');
-    // Clear from here to end of screen
-    process.stdout.write('\x1B[J');
+    process.stdout.write('\r\x1B[J'); // column 0, clear to end of screen
 
-    // Render all lines
-    let totalRows = 0;
+    // Step 2: Render all lines
     for (let i = 0; i < this.mlLines.length; i++) {
       const prompt = this.getLinePrompt(i);
-      const fullLine = prompt + this.mlLine(i);
-
-      process.stdout.write(fullLine);
-
-      // Calculate how many display rows this line takes
-      const displayPos = calcDisplayPos(fullLine, cols);
-      const lineRows = displayPos.rows + (displayPos.cols > 0 ? 1 : 1);
-      totalRows += lineRows;
-
-      // Write newline after each line except the last
+      process.stdout.write(prompt + this.mlLine(i));
       if (i < this.mlLines.length - 1) {
         process.stdout.write('\n');
       }
     }
 
-    // Calculate total rows (0-indexed from top)
-    // We need the total rows occupied to know how far up to go next time
-    let totalDisplayRows = 0;
-    for (let i = 0; i < this.mlLines.length; i++) {
-      const prompt = this.getLinePrompt(i);
-      const fullLine = prompt + this.mlLine(i);
-      const dp = calcDisplayPos(fullLine, cols);
-      totalDisplayRows += dp.rows; // rows above the last row of this line
-      if (i < this.mlLines.length - 1) {
-        totalDisplayRows += 1; // the newline
-      }
-    }
-    this.mlTotalRows = totalDisplayRows;
-
-    // Now position cursor at the correct location
-    // First, figure out where the cursor should be (mlLineIdx, mlColIdx)
-    const cursorPrompt = this.getLinePrompt(this.mlLineIdx);
-    const cursorContent = cursorPrompt + this.mlLine(this.mlLineIdx).slice(0, this.mlColIdx);
-    const cursorDP = calcDisplayPos(cursorContent, cols);
-
-    // How many rows from the current position (end of last line) to the cursor line?
-    // Current position = end of last line
-    const lastPrompt = this.getLinePrompt(this.mlLines.length - 1);
-    const lastFull = lastPrompt + this.mlLine(this.mlLines.length - 1);
-    const lastDP = calcDisplayPos(lastFull, cols);
-
-    // Rows from end of last line to bottom of block = 0 (we're there)
-    // Rows from top of block to cursor:
+    // Step 3: Calculate row positions
+    // rowsFromTopToCursor: where the cursor should end up
     let rowsFromTopToCursor = 0;
     for (let i = 0; i < this.mlLineIdx; i++) {
-      const p = this.getLinePrompt(i);
-      const fl = p + this.mlLine(i);
+      const fl = this.getLinePrompt(i) + this.mlLine(i);
       const dp = calcDisplayPos(fl, cols);
-      rowsFromTopToCursor += dp.rows + 1; // +1 for the newline
+      rowsFromTopToCursor += dp.rows + 1; // +1 for the newline between lines
     }
+    const cursorContent = this.getLinePrompt(this.mlLineIdx) + this.mlLine(this.mlLineIdx).slice(0, this.mlColIdx);
+    const cursorDP = calcDisplayPos(cursorContent, cols);
     rowsFromTopToCursor += cursorDP.rows;
 
-    // Rows from top of block to end of last line:
+    // rowsFromTopToEnd: where the terminal cursor is now (end of last line)
     let rowsFromTopToEnd = 0;
     for (let i = 0; i < this.mlLines.length - 1; i++) {
-      const p = this.getLinePrompt(i);
-      const fl = p + this.mlLine(i);
+      const fl = this.getLinePrompt(i) + this.mlLine(i);
       const dp = calcDisplayPos(fl, cols);
       rowsFromTopToEnd += dp.rows + 1;
     }
+    const lastFl = this.getLinePrompt(this.mlLines.length - 1) + this.mlLine(this.mlLines.length - 1);
+    const lastDP = calcDisplayPos(lastFl, cols);
     rowsFromTopToEnd += lastDP.rows;
 
-    const rowsUp = rowsFromTopToEnd - rowsFromTopToCursor;
-    if (rowsUp > 0) {
-      process.stdout.write(`\x1B[${rowsUp}A`);
+    // Step 4: Move from end of last line to cursor position
+    const moveUp = rowsFromTopToEnd - rowsFromTopToCursor;
+    if (moveUp > 0) {
+      process.stdout.write(`\x1B[${moveUp}A`);
     }
-    // Move to correct column
-    process.stdout.write(`\r\x1B[${cursorDP.cols}C`);
+    process.stdout.write(`\r`);
+    if (cursorDP.cols > 0) {
+      process.stdout.write(`\x1B[${cursorDP.cols}C`);
+    }
+
+    // Save cursor row for next refresh
+    this.mlCursorRow = rowsFromTopToCursor;
   }
 
   /** Safely get a line from mlLines (returns '' for out of bounds) */
@@ -365,7 +334,7 @@ export class Repl {
     this.mlLineIdx = 0;
     this.mlColIdx = 0;
     this.mlActive = false;
-    this.mlTotalRows = 0;
+    this.mlCursorRow = 0;
   }
 
   /** Sync readline's line/cursor from our multi-line state (for the current line) */
@@ -435,8 +404,8 @@ export class Repl {
       // Ctrl+C in multi-line → cancel and reset
       if (key.name === 'c' && key.ctrl && self.mlActive) {
         // Clear the multi-line display
-        if (self.mlTotalRows > 0) {
-          process.stdout.write(`\x1B[${self.mlTotalRows}A`);
+        if (self.mlCursorRow > 0) {
+          process.stdout.write(`\x1B[${self.mlCursorRow}A`);
         }
         process.stdout.write('\r\x1B[J');
         self.mlReset();
@@ -465,11 +434,12 @@ export class Repl {
           self.mlLineIdx = 0;
           self.mlActive = true;
 
-          // Calculate initial mlTotalRows from the current single-line display
+          // Calculate initial cursor row from the current single-line display
           const cols = process.stdout.columns || 80;
           const prompt = self.getLinePrompt(0);
-          const dp = calcDisplayPos(prompt + self.mlLine(0), cols);
-          self.mlTotalRows = dp.rows;
+          const beforeCursor = prompt + (this.line || '').slice(0, this.cursor || 0);
+          const dp = calcDisplayPos(beforeCursor, cols);
+          self.mlCursorRow = dp.rows;
         } else {
           self.mlSyncFromReadline();
         }
@@ -503,35 +473,19 @@ export class Repl {
           self.mlSyncFromReadline();
           const fullText = self.mlLines.join('\n');
 
-          // Clear multi-line display and move to after it
-          // (Already at cursor position — move to end first)
+          // Move cursor from current position to end of block, then newline
           const cols = process.stdout.columns || 80;
           let rowsFromTopToEnd = 0;
           for (let i = 0; i < self.mlLines.length - 1; i++) {
-            const p = self.getLinePrompt(i);
-            const fl = p + self.mlLine(i);
+            const fl = self.getLinePrompt(i) + self.mlLine(i);
             const dp = calcDisplayPos(fl, cols);
             rowsFromTopToEnd += dp.rows + 1;
           }
-          const lastP = self.getLinePrompt(self.mlLines.length - 1);
-          const lastFL = lastP + self.mlLine(self.mlLines.length - 1);
-          const lastDP = calcDisplayPos(lastFL, cols);
+          const lastFl = self.getLinePrompt(self.mlLines.length - 1) + self.mlLine(self.mlLines.length - 1);
+          const lastDP = calcDisplayPos(lastFl, cols);
           rowsFromTopToEnd += lastDP.rows;
 
-          // Move cursor to current position in block first
-          let rowsFromTopToCursor = 0;
-          for (let i = 0; i < self.mlLineIdx; i++) {
-            const p = self.getLinePrompt(i);
-            const fl = p + self.mlLine(i);
-            const dp = calcDisplayPos(fl, cols);
-            rowsFromTopToCursor += dp.rows + 1;
-          }
-          const curP = self.getLinePrompt(self.mlLineIdx);
-          const curContent = curP + self.mlLine(self.mlLineIdx).slice(0, self.mlColIdx);
-          const curDP = calcDisplayPos(curContent, cols);
-          rowsFromTopToCursor += curDP.rows;
-
-          const downToEnd = rowsFromTopToEnd - rowsFromTopToCursor;
+          const downToEnd = rowsFromTopToEnd - self.mlCursorRow;
           if (downToEnd > 0) {
             process.stdout.write(`\x1B[${downToEnd}B`);
           }
@@ -694,8 +648,9 @@ export class Repl {
 
         const cols = process.stdout.columns || 80;
         const prompt = this.getLinePrompt(0);
-        const dp = calcDisplayPos(prompt + this.mlLine(0), cols);
-        this.mlTotalRows = dp.rows;
+        const beforeCursor = prompt + (r.line || '').slice(0, r.cursor || 0);
+        const dp = calcDisplayPos(beforeCursor, cols);
+        this.mlCursorRow = dp.rows;
       } else {
         this.mlSyncFromReadline();
       }
