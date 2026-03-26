@@ -40,7 +40,7 @@ export const ko: Record<string, string> = {
   // REPL
   'repl.welcome.subtitle': 'AI 코드 에이전트',
   'repl.welcome.help': '/help로 명령어 확인, Ctrl+D로 종료',
-  'repl.welcome.multiline': 'Ctrl+Enter로 줄바꿈, Enter로 전송',
+  'repl.welcome.multiline': 'Ctrl+Enter(Win) / Shift+Enter(Mac)로 줄바꿈',
   'repl.goodbye': '안녕히 가세요!',
   'repl.ctrlc': '(Ctrl+C를 한 번 더 누르면 종료됩니다)',
   'repl.unknownCmd': '알 수 없는 명령어: {0}. /help로 사용 가능한 명령어를 확인하세요.',
@@ -49,7 +49,7 @@ export const ko: Record<string, string> = {
   // Slash commands
   'cmd.help.title': '사용 가능한 명령어:',
   'cmd.help.prefixes': '접두사: ! (셸 명령), @ (파일 참조)',
-  'cmd.help.multiline': 'Ctrl+Enter로 줄바꿈, Enter로 전송',
+  'cmd.help.multiline': 'Ctrl+Enter(Win) / Shift+Enter(Mac)로 줄바꿈',
   'cmd.quit.bye': '안녕히 가세요!',
   'cmd.clear.done': '대화가 초기화되었습니다',
   'cmd.model.current': '현재 모델: {0} ({1})',
