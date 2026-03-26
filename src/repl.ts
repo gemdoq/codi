@@ -237,6 +237,7 @@ export class Repl {
   private mlColIdx = 0;
   private mlActive = false; // true when lines.length > 1
   private mlTotalRows = 0;  // total display rows of the rendered multi-line block
+  private mlLastNewlineAt = 0; // timestamp of last newline insertion (to suppress trailing \r)
 
   constructor(options: ReplOptions) {
     this.options = options;
@@ -446,12 +447,17 @@ export class Repl {
         return;
       }
 
-      // Ctrl+Enter / Alt+Enter / Shift+Enter → insert newline
+      // Insert newline detection:
+      // - Windows Terminal Ctrl+Enter → name='enter' (0x0a), no modifiers
+      // - macOS/Linux Ctrl+J → name='enter' (0x0a) or name='j' + ctrl
+      // - Alt+Enter / Shift+Enter → name='return' with meta/shift flag
       const isNewline =
+        key.name === 'enter' || // \n (0x0a): Ctrl+Enter on Windows, Ctrl+J on Unix
         (key.name === 'return' && (key.ctrl || key.meta || key.shift)) ||
-        (key.name === 'j' && key.ctrl); // Ctrl+J = newline on most terminals
+        (key.name === 'j' && key.ctrl);
 
       if (isNewline) {
+        self.mlLastNewlineAt = Date.now();
         if (!self.mlActive) {
           // Enter multi-line mode: take current readline content as line 0
           self.mlLines = [this.line || ''];
@@ -488,6 +494,10 @@ export class Repl {
       }
 
       // Enter (no modifier) → submit
+      // Suppress trailing \r that some terminals send right after Ctrl+Enter's \n
+      if (key.name === 'return' && !key.ctrl && !key.meta && !key.shift && (Date.now() - self.mlLastNewlineAt < 100)) {
+        return; // ignore trailing \r from Ctrl+Enter
+      }
       if (key.name === 'return' && !key.ctrl && !key.meta && !key.shift) {
         if (self.mlActive) {
           self.mlSyncFromReadline();
