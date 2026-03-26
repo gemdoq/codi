@@ -425,6 +425,12 @@ export class Repl {
     rlAny._ttyWrite = function(s: string, key: Key) {
       if (!key) key = {};
 
+      // Debug: log key events when CODI_DEBUG_KEYS is set
+      if (process.env['CODI_DEBUG_KEYS']) {
+        const seq = s ? [...s].map(c => '0x' + c.charCodeAt(0).toString(16)).join(' ') : 'null';
+        process.stderr.write(`[KEY] name=${key.name} ctrl=${key.ctrl} meta=${key.meta} shift=${key.shift} seq=${key.sequence ? [...key.sequence].map(c => '0x' + c.charCodeAt(0).toString(16)).join(' ') : 'null'} s=${seq}\n`);
+      }
+
       // Ctrl+C in multi-line → cancel and reset
       if (key.name === 'c' && key.ctrl && self.mlActive) {
         // Clear the multi-line display
