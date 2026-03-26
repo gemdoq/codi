@@ -417,10 +417,14 @@ export class Repl {
       }
 
       // Insert newline detection:
-      // - Windows Terminal Ctrl+Enter → name='enter' (0x0a), no modifiers
-      // - macOS/Linux Ctrl+J → name='enter' (0x0a) or name='j' + ctrl
-      // - Alt+Enter / Shift+Enter → name='return' with meta/shift flag
+      // - Kitty protocol: Shift+Enter = \x1b[13;2u, Ctrl+Enter = \x1b[13;5u
+      // - Windows Terminal (no kitty): Ctrl+Enter → name='enter' (0x0a)
+      // - macOS/Linux: Ctrl+J → name='enter' (0x0a) or name='j' + ctrl
+      // - macOS terminals: Shift+Enter → name='return' with shift flag
+      const seq = key.sequence || '';
+      const isKittyModifiedEnter = seq.startsWith('\x1b[13;') && seq.endsWith('u');
       const isNewline =
+        isKittyModifiedEnter || // Kitty protocol: any modified Enter
         key.name === 'enter' || // \n (0x0a): Ctrl+Enter on Windows, Ctrl+J on Unix
         (key.name === 'return' && (key.ctrl || key.meta || key.shift)) ||
         (key.name === 'j' && key.ctrl);
@@ -681,9 +685,12 @@ export class Repl {
       this.refreshMultiline();
     });
 
-    // Enable bracket paste mode
+    // Enable bracket paste mode + kitty keyboard protocol (level 1)
+    // Kitty protocol makes Shift+Enter / Ctrl+Enter send distinct CSI sequences
+    // so they can be distinguished from plain Enter on all terminals
     if (process.stdin.isTTY) {
-      process.stdout.write('\x1B[?2004h');
+      process.stdout.write('\x1B[?2004h'); // bracket paste
+      process.stdout.write('\x1B[>1u');    // kitty keyboard protocol level 1
     }
 
     registerPromptHandler((prompt: string) => {
@@ -856,7 +863,8 @@ export class Repl {
     this.running = false;
     unregisterPromptHandler();
     if (process.stdin.isTTY) {
-      process.stdout.write('\x1B[?2004l');
+      process.stdout.write('\x1B[?2004l'); // disable bracket paste
+      process.stdout.write('\x1B[<u');     // disable kitty keyboard protocol
     }
     if (this.pasteFilter) {
       input.unpipe(this.pasteFilter);

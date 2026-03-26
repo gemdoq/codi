@@ -40,7 +40,7 @@ export const en: Record<string, string> = {
   // REPL
   'repl.welcome.subtitle': 'AI Code Agent for Terminal',
   'repl.welcome.help': 'Type /help for commands, Ctrl+D to quit',
-  'repl.welcome.multiline': 'Ctrl+Enter(Win) / Shift+Enter(Mac) for newline',
+  'repl.welcome.multiline': 'Shift+Enter or Ctrl+Enter for newline',
   'repl.goodbye': 'Goodbye!',
   'repl.ctrlc': '(Press Ctrl+C again to exit)',
   'repl.unknownCmd': 'Unknown command: {0}. Type /help for available commands.',
@@ -49,7 +49,7 @@ export const en: Record<string, string> = {
   // Slash commands
   'cmd.help.title': 'Available Commands:',
   'cmd.help.prefixes': 'Prefixes: ! (bash), @ (file reference)',
-  'cmd.help.multiline': 'Ctrl+Enter(Win) / Shift+Enter(Mac) for newline',
+  'cmd.help.multiline': 'Shift+Enter or Ctrl+Enter for newline',
   'cmd.quit.bye': 'Goodbye!',
   'cmd.clear.done': 'Conversation cleared',
   'cmd.model.current': 'Current model: {0} ({1})',
