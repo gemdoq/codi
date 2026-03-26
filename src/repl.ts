@@ -118,12 +118,6 @@ function calcDisplayPos(str: string, cols: number): { rows: number; cols: number
 
 // ── PasteFilter Transform ────────────────────────────────────────────
 
-/**
- * Transform stream that intercepts bracket paste escape sequences.
- * During paste, content is NOT pushed to readline. Instead, 'paste-complete'
- * is emitted with the buffered text so the REPL can inject it directly
- * into readline's state and do a single clean refresh.
- */
 class PasteFilter extends Transform {
   private pasteBuf = '';
   public isPasteActive = false;
@@ -160,7 +154,6 @@ class PasteFilter extends Transform {
           this.pasteBuf += data.slice(0, idx);
           this.isPasteActive = false;
           const cleaned = this.pasteBuf.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
-          // Don't push to readline — emit event for direct injection
           if (cleaned) this.emit('paste-complete', cleaned);
           this.pasteBuf = '';
           data = data.slice(idx + 6);
@@ -235,9 +228,9 @@ export class Repl {
   private mlLines: string[] = [''];
   private mlLineIdx = 0;
   private mlColIdx = 0;
-  private mlActive = false; // true when lines.length > 1
-  private mlCursorRow = 0;  // cursor's row offset from top of the block (for correct move-up)
-  private mlLastNewlineAt = 0; // timestamp of last newline insertion (to suppress trailing \r)
+  private mlActive = false;
+  private mlCursorRow = 0;
+  private mlLastNewlineAt = 0;
 
   constructor(options: ReplOptions) {
     this.options = options;
@@ -252,30 +245,91 @@ export class Repl {
     });
   }
 
-  /** Get the prompt string for a given line index */
   private getLinePrompt(lineIdx: number): string {
     return lineIdx === 0 ? renderPrompt() : chalk.dim('... ');
   }
 
-  /** Get the plain (no ANSI) prompt width for a given line index */
-  private getLinePromptWidth(lineIdx: number): number {
-    return lineIdx === 0 ? stringWidth(renderPrompt()) : 4; // "... " = 4
+  private mlLine(idx: number): string {
+    return this.mlLines[idx] ?? '';
+  }
+
+  private mlReset(): void {
+    this.mlLines = [''];
+    this.mlLineIdx = 0;
+    this.mlColIdx = 0;
+    this.mlActive = false;
+    this.mlCursorRow = 0;
+  }
+
+  /** Enter multi-line mode from current readline state */
+  private mlEnterFromReadline(): void {
+    if (!this.rl) return;
+    const r = this.rl as any;
+    const text = r.line || '';
+    const cursor = r.cursor || 0;
+
+    if (text.includes('\n')) {
+      // History item with newlines — split into lines
+      this.mlLines = text.split('\n');
+      // Find which line the cursor is on
+      let pos = 0;
+      this.mlLineIdx = 0;
+      for (let i = 0; i < this.mlLines.length; i++) {
+        const lineLen = (this.mlLines[i] ?? '').length;
+        if (pos + lineLen >= cursor) {
+          this.mlLineIdx = i;
+          this.mlColIdx = cursor - pos;
+          break;
+        }
+        pos += lineLen + 1; // +1 for \n
+      }
+    } else {
+      this.mlLines = [text];
+      this.mlLineIdx = 0;
+      this.mlColIdx = cursor;
+    }
+    this.mlActive = true;
+
+    // Calculate current cursor row for refreshMultiline
+    const cols = process.stdout.columns || 80;
+    const beforeCursor = this.getLinePrompt(0) + text.slice(0, cursor);
+    const dp = calcDisplayPos(beforeCursor, cols);
+    this.mlCursorRow = dp.rows;
+  }
+
+  /** Sync readline's line/cursor to current mlLine */
+  private mlSyncToReadline(): void {
+    if (!this.rl) return;
+    const r = this.rl as any;
+    r.line = this.mlLine(this.mlLineIdx);
+    r.cursor = this.mlColIdx;
+  }
+
+  /** Sync mlLines/mlColIdx from readline after it processes a key */
+  private mlSyncFromReadline(): void {
+    if (!this.rl) return;
+    const r = this.rl as any;
+    this.mlLines[this.mlLineIdx] = r.line;
+    this.mlColIdx = r.cursor;
   }
 
   /**
-   * Render the entire multi-line input block from scratch.
-   * Moves cursor to correct position at the end.
+   * Render the entire multi-line block from scratch.
+   * 1. Move to top of block using mlCursorRow
+   * 2. Clear to end of screen
+   * 3. Render all lines
+   * 4. Position cursor at mlLineIdx/mlColIdx
+   * 5. Save new mlCursorRow
    */
   private refreshMultiline(): void {
     if (!this.rl) return;
     const cols = process.stdout.columns || 80;
 
-    // Step 1: Move cursor to the TOP of the block
-    // mlCursorRow = how many rows below the top the cursor currently sits
+    // Step 1: Move to top of block
     if (this.mlCursorRow > 0) {
       process.stdout.write(`\x1B[${this.mlCursorRow}A`);
     }
-    process.stdout.write('\r\x1B[J'); // column 0, clear to end of screen
+    process.stdout.write('\r\x1B[J');
 
     // Step 2: Render all lines
     for (let i = 0; i < this.mlLines.length; i++) {
@@ -286,19 +340,17 @@ export class Repl {
       }
     }
 
-    // Step 3: Calculate row positions
-    // rowsFromTopToCursor: where the cursor should end up
+    // Step 3: Calculate positions
     let rowsFromTopToCursor = 0;
     for (let i = 0; i < this.mlLineIdx; i++) {
       const fl = this.getLinePrompt(i) + this.mlLine(i);
       const dp = calcDisplayPos(fl, cols);
-      rowsFromTopToCursor += dp.rows + 1; // +1 for the newline between lines
+      rowsFromTopToCursor += dp.rows + 1;
     }
     const cursorContent = this.getLinePrompt(this.mlLineIdx) + this.mlLine(this.mlLineIdx).slice(0, this.mlColIdx);
     const cursorDP = calcDisplayPos(cursorContent, cols);
     rowsFromTopToCursor += cursorDP.rows;
 
-    // rowsFromTopToEnd: where the terminal cursor is now (end of last line)
     let rowsFromTopToEnd = 0;
     for (let i = 0; i < this.mlLines.length - 1; i++) {
       const fl = this.getLinePrompt(i) + this.mlLine(i);
@@ -309,48 +361,18 @@ export class Repl {
     const lastDP = calcDisplayPos(lastFl, cols);
     rowsFromTopToEnd += lastDP.rows;
 
-    // Step 4: Move from end of last line to cursor position
+    // Step 4: Move cursor to correct position
     const moveUp = rowsFromTopToEnd - rowsFromTopToCursor;
     if (moveUp > 0) {
       process.stdout.write(`\x1B[${moveUp}A`);
     }
-    process.stdout.write(`\r`);
+    process.stdout.write('\r');
     if (cursorDP.cols > 0) {
       process.stdout.write(`\x1B[${cursorDP.cols}C`);
     }
 
-    // Save cursor row for next refresh
+    // Step 5: Save cursor row
     this.mlCursorRow = rowsFromTopToCursor;
-  }
-
-  /** Safely get a line from mlLines (returns '' for out of bounds) */
-  private mlLine(idx: number): string {
-    return this.mlLines[idx] ?? '';
-  }
-
-  /** Reset multi-line state to single empty line */
-  private mlReset(): void {
-    this.mlLines = [''];
-    this.mlLineIdx = 0;
-    this.mlColIdx = 0;
-    this.mlActive = false;
-    this.mlCursorRow = 0;
-  }
-
-  /** Sync readline's line/cursor from our multi-line state (for the current line) */
-  private mlSyncToReadline(): void {
-    if (!this.rl) return;
-    const r = this.rl as any;
-    r.line = this.mlLine(this.mlLineIdx);
-    r.cursor = this.mlColIdx;
-  }
-
-  /** Sync our multi-line state from readline (after readline processes a key) */
-  private mlSyncFromReadline(): void {
-    if (!this.rl) return;
-    const r = this.rl as any;
-    this.mlLines[this.mlLineIdx] = r.line;
-    this.mlColIdx = r.cursor;
   }
 
   async start(): Promise<void> {
@@ -388,9 +410,23 @@ export class Repl {
       return calcDisplayPos(beforeCursor, cols);
     };
 
+    // ── Suppress readline's own rendering in multi-line mode ──
+    const origWriteToOutput = rlAny._writeToOutput.bind(rlAny);
+    const origRefreshLine = rlAny._refreshLine.bind(rlAny);
+    const self = this;
+
+    rlAny._writeToOutput = function(str: string) {
+      if (self.mlActive) return; // suppress — refreshMultiline handles all output
+      origWriteToOutput(str);
+    };
+
+    rlAny._refreshLine = function() {
+      if (self.mlActive) return; // suppress — refreshMultiline handles all output
+      origRefreshLine();
+    };
+
     // ── Override _ttyWrite for multi-line editing ──
     const origTtyWrite = rlAny._ttyWrite.bind(rlAny);
-    const self = this;
 
     rlAny._ttyWrite = function(s: string, key: Key) {
       if (!key) key = {};
@@ -401,64 +437,44 @@ export class Repl {
         process.stderr.write(`[KEY] name=${key.name} ctrl=${key.ctrl} meta=${key.meta} shift=${key.shift} seq=${key.sequence ? [...key.sequence].map(c => '0x' + c.charCodeAt(0).toString(16)).join(' ') : 'null'} s=${seq}\n`);
       }
 
-      // Ctrl+C in multi-line → cancel and reset
-      if (key.name === 'c' && key.ctrl && self.mlActive) {
-        // Clear the multi-line display
-        if (self.mlCursorRow > 0) {
-          process.stdout.write(`\x1B[${self.mlCursorRow}A`);
-        }
-        process.stdout.write('\r\x1B[J');
-        self.mlReset();
-        // Reset readline state
-        this.line = '';
-        this.cursor = 0;
-        this._refreshLine();
-        return;
-      }
-
-      // Insert newline detection:
-      // - Kitty protocol: Shift+Enter = \x1b[13;2u, Ctrl+Enter = \x1b[13;5u
-      // - Windows Terminal (no kitty): Ctrl+Enter → name='enter' (0x0a)
-      // - macOS/Linux: Ctrl+J → name='enter' (0x0a) or name='j' + ctrl
-      // - macOS terminals: Shift+Enter → name='return' with shift flag
+      // ── Newline detection ──
       const seq = key.sequence || '';
       const isKittyModifiedEnter = seq.startsWith('\x1b[13;') && seq.endsWith('u');
       const isNewline =
-        isKittyModifiedEnter || // Kitty protocol: any modified Enter
-        key.name === 'enter' || // \n (0x0a): Ctrl+Enter on Windows, Ctrl+J on Unix
+        isKittyModifiedEnter ||
+        key.name === 'enter' ||
         (key.name === 'return' && (key.ctrl || key.meta || key.shift)) ||
         (key.name === 'j' && key.ctrl);
 
       if (isNewline) {
         self.mlLastNewlineAt = Date.now();
+
         if (!self.mlActive) {
-          // Enter multi-line mode: take current readline content as line 0
           self.mlLines = [this.line || ''];
           self.mlColIdx = this.cursor || 0;
           self.mlLineIdx = 0;
           self.mlActive = true;
-
-          // Calculate initial cursor row from the current single-line display
+          // Calculate where cursor currently is on screen
           const cols = process.stdout.columns || 80;
-          const prompt = self.getLinePrompt(0);
-          const beforeCursor = prompt + (this.line || '').slice(0, this.cursor || 0);
-          const dp = calcDisplayPos(beforeCursor, cols);
+          const dp = calcDisplayPos(
+            self.getLinePrompt(0) + (this.line || '').slice(0, this.cursor || 0),
+            cols,
+          );
           self.mlCursorRow = dp.rows;
         } else {
           self.mlSyncFromReadline();
         }
 
         // Split current line at cursor
-        const currentLine = self.mlLine(self.mlLineIdx);
-        const before = currentLine.slice(0, self.mlColIdx);
-        const after = currentLine.slice(self.mlColIdx);
-
+        const curLine = self.mlLine(self.mlLineIdx);
+        const before = curLine.slice(0, self.mlColIdx);
+        const after = curLine.slice(self.mlColIdx);
         self.mlLines[self.mlLineIdx] = before;
         self.mlLines.splice(self.mlLineIdx + 1, 0, after);
         self.mlLineIdx++;
         self.mlColIdx = 0;
 
-        // Update readline to show the new current line
+        // Sync readline to new current line
         this.line = after;
         this.cursor = 0;
         this._prompt = self.getLinePrompt(self.mlLineIdx);
@@ -467,17 +483,18 @@ export class Repl {
         return;
       }
 
-      // Enter (no modifier) → submit
-      // Suppress trailing \r that some terminals send right after Ctrl+Enter's \n
+      // ── Suppress trailing \r after newline insertion ──
       if (key.name === 'return' && !key.ctrl && !key.meta && !key.shift && (Date.now() - self.mlLastNewlineAt < 100)) {
-        return; // ignore trailing \r from Ctrl+Enter
+        return;
       }
+
+      // ── Enter (submit) ──
       if (key.name === 'return' && !key.ctrl && !key.meta && !key.shift) {
         if (self.mlActive) {
           self.mlSyncFromReadline();
           const fullText = self.mlLines.join('\n');
 
-          // Move cursor from current position to end of block, then newline
+          // Move cursor to end of block
           const cols = process.stdout.columns || 80;
           let rowsFromTopToEnd = 0;
           for (let i = 0; i < self.mlLines.length - 1; i++) {
@@ -486,53 +503,69 @@ export class Repl {
             rowsFromTopToEnd += dp.rows + 1;
           }
           const lastFl = self.getLinePrompt(self.mlLines.length - 1) + self.mlLine(self.mlLines.length - 1);
-          const lastDP = calcDisplayPos(lastFl, cols);
-          rowsFromTopToEnd += lastDP.rows;
+          rowsFromTopToEnd += calcDisplayPos(lastFl, cols).rows;
 
           const downToEnd = rowsFromTopToEnd - self.mlCursorRow;
-          if (downToEnd > 0) {
-            process.stdout.write(`\x1B[${downToEnd}B`);
-          }
-
+          if (downToEnd > 0) process.stdout.write(`\x1B[${downToEnd}B`);
           process.stdout.write('\n');
-          self.mlReset();
 
-          // Emit the full multi-line text as a line event
+          self.mlReset();
           this.line = '';
           this.cursor = 0;
+          this.prevRows = 0;
           this._prompt = renderPrompt();
           this.emit('line', fullText);
           return;
         }
-        // Single line — let readline handle normally
         origTtyWrite(s, key);
         return;
       }
 
-      // Up arrow
+      // ── Ctrl+C in multi-line → cancel ──
+      if (key.name === 'c' && key.ctrl && self.mlActive) {
+        if (self.mlCursorRow > 0) {
+          process.stdout.write(`\x1B[${self.mlCursorRow}A`);
+        }
+        process.stdout.write('\r\x1B[J');
+        self.mlReset();
+        this.line = '';
+        this.cursor = 0;
+        this.prevRows = 0;
+        this._prompt = renderPrompt();
+        origRefreshLine();
+        return;
+      }
+
+      // ── Up arrow ──
       if (key.name === 'up' && !key.ctrl && !key.meta) {
         if (self.mlActive && self.mlLineIdx > 0) {
+          // Move to previous line
           self.mlSyncFromReadline();
           self.mlLineIdx--;
-          // Try to keep similar column position
           self.mlColIdx = Math.min(self.mlColIdx, self.mlLine(self.mlLineIdx).length);
           self.mlSyncToReadline();
           this._prompt = self.getLinePrompt(self.mlLineIdx);
           self.refreshMultiline();
           return;
         }
-        // At first line or single-line → history (let readline handle)
         if (self.mlActive) {
-          // Already at line 0 in multi-line — don't navigate history
+          // At first line in multi-line — block
           return;
         }
+        // Single-line: let readline handle history
         origTtyWrite(s, key);
+        // Check if history item is multi-line
+        if ((this.line || '').includes('\n')) {
+          self.mlEnterFromReadline();
+          self.refreshMultiline();
+        }
         return;
       }
 
-      // Down arrow
+      // ── Down arrow ──
       if (key.name === 'down' && !key.ctrl && !key.meta) {
         if (self.mlActive && self.mlLineIdx < self.mlLines.length - 1) {
+          // Move to next line
           self.mlSyncFromReadline();
           self.mlLineIdx++;
           self.mlColIdx = Math.min(self.mlColIdx, self.mlLine(self.mlLineIdx).length);
@@ -541,58 +574,67 @@ export class Repl {
           self.refreshMultiline();
           return;
         }
-        // At last line or single-line → history (let readline handle)
         if (self.mlActive) {
-          // Already at last line — don't navigate history
+          // At last line — block
           return;
         }
+        // Single-line: let readline handle history
         origTtyWrite(s, key);
+        if ((this.line || '').includes('\n')) {
+          self.mlEnterFromReadline();
+          self.refreshMultiline();
+        }
         return;
       }
 
-      // Backspace at beginning of line in multi-line → merge with previous line
-      if ((key.name === 'backspace') && self.mlActive) {
+      // ── Backspace in multi-line ──
+      if (key.name === 'backspace' && self.mlActive) {
         self.mlSyncFromReadline();
         if (self.mlColIdx === 0 && self.mlLineIdx > 0) {
+          // Merge with previous line
           const prevLine = self.mlLine(self.mlLineIdx - 1);
           const curLine = self.mlLine(self.mlLineIdx);
           self.mlLines[self.mlLineIdx - 1] = prevLine + curLine;
           self.mlLines.splice(self.mlLineIdx, 1);
           self.mlLineIdx--;
           self.mlColIdx = prevLine.length;
-
-          if (self.mlLines.length === 1) {
-            self.mlActive = false;
-          }
-
+          if (self.mlLines.length === 1) self.mlActive = false;
           self.mlSyncToReadline();
           this._prompt = self.getLinePrompt(self.mlLineIdx);
-          self.refreshMultiline();
+          if (self.mlActive) {
+            self.refreshMultiline();
+          } else {
+            // Back to single line — let readline render
+            this.prevRows = 0;
+            origRefreshLine();
+          }
           return;
         }
-        // Normal backspace within line — let readline handle, then sync back
+        // Normal backspace — let readline process
         origTtyWrite(s, key);
         self.mlSyncFromReadline();
         self.refreshMultiline();
         return;
       }
 
-      // Delete at end of line in multi-line → merge with next line
-      if ((key.name === 'delete') && self.mlActive) {
+      // ── Delete in multi-line ──
+      if (key.name === 'delete' && self.mlActive) {
         self.mlSyncFromReadline();
         if (self.mlColIdx === self.mlLine(self.mlLineIdx).length && self.mlLineIdx < self.mlLines.length - 1) {
+          // Merge with next line
           const curLine = self.mlLine(self.mlLineIdx);
           const nextLine = self.mlLine(self.mlLineIdx + 1);
           self.mlLines[self.mlLineIdx] = curLine + nextLine;
           self.mlLines.splice(self.mlLineIdx + 1, 1);
-
-          if (self.mlLines.length === 1) {
-            self.mlActive = false;
-          }
-
+          if (self.mlLines.length === 1) self.mlActive = false;
           self.mlSyncToReadline();
           this._prompt = self.getLinePrompt(self.mlLineIdx);
-          self.refreshMultiline();
+          if (self.mlActive) {
+            self.refreshMultiline();
+          } else {
+            this.prevRows = 0;
+            origRefreshLine();
+          }
           return;
         }
         origTtyWrite(s, key);
@@ -601,19 +643,21 @@ export class Repl {
         return;
       }
 
-      // All other keys in multi-line mode
+      // ── All other keys in multi-line mode ──
       if (self.mlActive) {
+        // Let readline process the key (output is suppressed by _writeToOutput override)
         origTtyWrite(s, key);
+        // Sync back and re-render
         self.mlSyncFromReadline();
         self.refreshMultiline();
         return;
       }
 
-      // Single-line mode — pass through to readline normally
+      // ── Single-line mode — pass through ──
       origTtyWrite(s, key);
     };
 
-    // ── Handle paste: inject directly into readline state ──
+    // ── Handle paste ──
     this.pasteFilter.on('paste-complete', (text: string) => {
       if (!this.rl) return;
       const r = this.rl as any;
@@ -621,22 +665,20 @@ export class Repl {
       const pasteLines = text.split('\n');
 
       if (pasteLines.length === 1) {
-        // Single line paste — simple inject
+        // Single line paste
+        const pl = pasteLines[0] ?? '';
         if (this.mlActive) {
           this.mlSyncFromReadline();
           const cur = this.mlLine(this.mlLineIdx);
-          const before = cur.slice(0, this.mlColIdx);
-          const after = cur.slice(this.mlColIdx);
-          this.mlLines[this.mlLineIdx] = before + (pasteLines[0] ?? '') + after;
-          this.mlColIdx += (pasteLines[0] ?? '').length;
+          this.mlLines[this.mlLineIdx] = cur.slice(0, this.mlColIdx) + pl + cur.slice(this.mlColIdx);
+          this.mlColIdx += pl.length;
           this.mlSyncToReadline();
           this.refreshMultiline();
         } else {
           const before = r.line.slice(0, r.cursor);
           const after = r.line.slice(r.cursor);
-          const pl0 = pasteLines[0] ?? '';
-          r.line = before + pl0 + after;
-          r.cursor += pl0.length;
+          r.line = before + pl + after;
+          r.cursor += pl.length;
           r._refreshLine();
         }
         return;
@@ -644,53 +686,43 @@ export class Repl {
 
       // Multi-line paste
       if (!this.mlActive) {
-        // Enter multi-line mode
         this.mlLines = [r.line || ''];
         this.mlColIdx = r.cursor || 0;
         this.mlLineIdx = 0;
         this.mlActive = true;
-
         const cols = process.stdout.columns || 80;
-        const prompt = this.getLinePrompt(0);
-        const beforeCursor = prompt + (r.line || '').slice(0, r.cursor || 0);
-        const dp = calcDisplayPos(beforeCursor, cols);
+        const dp = calcDisplayPos(
+          this.getLinePrompt(0) + (r.line || '').slice(0, r.cursor || 0),
+          cols,
+        );
         this.mlCursorRow = dp.rows;
       } else {
         this.mlSyncFromReadline();
       }
 
-      // Insert paste lines at cursor
       const curLine = this.mlLine(this.mlLineIdx);
       const before = curLine.slice(0, this.mlColIdx);
       const after = curLine.slice(this.mlColIdx);
 
-      // First paste line merges with content before cursor
       this.mlLines[this.mlLineIdx] = before + (pasteLines[0] ?? '');
-
-      // Middle paste lines are inserted as new lines
       for (let i = 1; i < pasteLines.length - 1; i++) {
         this.mlLines.splice(this.mlLineIdx + i, 0, pasteLines[i] ?? '');
       }
-
-      // Last paste line merges with content after cursor
       const lastPasteIdx = this.mlLineIdx + pasteLines.length - 1;
-      const lastPasteLine = pasteLines[pasteLines.length - 1] ?? '';
-      this.mlLines.splice(lastPasteIdx, 0, lastPasteLine + after);
+      const lastPl = pasteLines[pasteLines.length - 1] ?? '';
+      this.mlLines.splice(lastPasteIdx, 0, lastPl + after);
 
       this.mlLineIdx = lastPasteIdx;
-      this.mlColIdx = lastPasteLine.length;
-
+      this.mlColIdx = lastPl.length;
       this.mlSyncToReadline();
       r._prompt = this.getLinePrompt(this.mlLineIdx);
       this.refreshMultiline();
     });
 
-    // Enable bracket paste mode + kitty keyboard protocol (level 1)
-    // Kitty protocol makes Shift+Enter / Ctrl+Enter send distinct CSI sequences
-    // so they can be distinguished from plain Enter on all terminals
+    // Enable bracket paste mode + kitty keyboard protocol
     if (process.stdin.isTTY) {
-      process.stdout.write('\x1B[?2004h'); // bracket paste
-      process.stdout.write('\x1B[>1u');    // kitty keyboard protocol level 1
+      process.stdout.write('\x1B[?2004h');
+      process.stdout.write('\x1B[>1u');
     }
 
     registerPromptHandler((prompt: string) => {
@@ -863,8 +895,8 @@ export class Repl {
     this.running = false;
     unregisterPromptHandler();
     if (process.stdin.isTTY) {
-      process.stdout.write('\x1B[?2004l'); // disable bracket paste
-      process.stdout.write('\x1B[<u');     // disable kitty keyboard protocol
+      process.stdout.write('\x1B[?2004l');
+      process.stdout.write('\x1B[<u');
     }
     if (this.pasteFilter) {
       input.unpipe(this.pasteFilter);
