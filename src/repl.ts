@@ -439,7 +439,7 @@ export class Repl {
       // Debug: log key events when CODI_DEBUG_KEYS is set
       if (process.env['CODI_DEBUG_KEYS']) {
         const seq = s ? [...s].map(c => '0x' + c.charCodeAt(0).toString(16)).join(' ') : 'null';
-        process.stderr.write(`[KEY] name=${key.name} ctrl=${key.ctrl} meta=${key.meta} shift=${key.shift} seq=${key.sequence ? [...key.sequence].map(c => '0x' + c.charCodeAt(0).toString(16)).join(' ') : 'null'} s=${seq}\n`);
+        process.stderr.write(`[KEY] name=${key.name} ctrl=${key.ctrl} shift=${key.shift} seq=${key.sequence ? [...key.sequence].map(c => '0x' + c.charCodeAt(0).toString(16)).join(' ') : 'null'} ml=${self.mlActive} li=${self.mlLineIdx}/${self.mlLines.length} histIdx=${this.historyIndex} line=${JSON.stringify((this.line||'').slice(0,30))}\n`);
       }
 
       // ── Newline detection ──
@@ -584,6 +584,10 @@ export class Repl {
 
         const newText = this.line || '';
 
+        if (process.env['CODI_DEBUG_KEYS']) {
+          process.stderr.write(`[UP-HIST] wasML=${wasML} before=${JSON.stringify(textBefore).slice(0,30)} after=${JSON.stringify(newText).slice(0,30)} histIdx=${this.historyIndex} changed=${newText !== textBefore}\n`);
+        }
+
         // If text didn't change (no more history) and was multi-line, restore original state
         if (newText === textBefore && wasML) {
           self.mlLines = newText.split('\n');
@@ -661,6 +665,10 @@ export class Repl {
         suppressRendering = false;
 
         const newText = this.line || '';
+
+        if (process.env['CODI_DEBUG_KEYS']) {
+          process.stderr.write(`[DOWN-HIST] wasML=${wasML} before=${JSON.stringify(textBefore).slice(0,30)} after=${JSON.stringify(newText).slice(0,30)} histIdx=${this.historyIndex} changed=${newText !== textBefore}\n`);
+        }
 
         if (newText === textBefore && wasML) {
           self.mlLines = newText.split('\n');
