@@ -414,14 +414,15 @@ export class Repl {
     const origWriteToOutput = rlAny._writeToOutput.bind(rlAny);
     const origRefreshLine = rlAny._refreshLine.bind(rlAny);
     const self = this;
+    let suppressRendering = false;
 
     rlAny._writeToOutput = function(str: string) {
-      if (self.mlActive) return; // suppress — refreshMultiline handles all output
+      if (self.mlActive || suppressRendering) return;
       origWriteToOutput(str);
     };
 
     rlAny._refreshLine = function() {
-      if (self.mlActive) return; // suppress — refreshMultiline handles all output
+      if (self.mlActive || suppressRendering) return;
       origRefreshLine();
     };
 
@@ -539,7 +540,7 @@ export class Repl {
       // ── Up arrow ──
       if (key.name === 'up' && !key.ctrl && !key.meta) {
         if (self.mlActive && self.mlLineIdx > 0) {
-          // Move to previous line
+          // Move to previous line within multi-line
           self.mlSyncFromReadline();
           self.mlLineIdx--;
           self.mlColIdx = Math.min(self.mlColIdx, self.mlLine(self.mlLineIdx).length);
@@ -548,16 +549,66 @@ export class Repl {
           self.refreshMultiline();
           return;
         }
-        if (self.mlActive) {
-          // At first line in multi-line — block
+
+        // At first line of multi-line OR single-line → navigate history
+        const wasML = self.mlActive;
+        const savedLineIdx = self.mlLineIdx;
+        const savedColIdx = self.mlColIdx;
+
+        if (wasML) {
+          self.mlSyncFromReadline();
+          const fullText = self.mlLines.join('\n');
+          // Clear multi-line display
+          if (self.mlCursorRow > 0) process.stdout.write(`\x1B[${self.mlCursorRow}A`);
+          process.stdout.write('\r\x1B[J');
+          // Restore full text to readline so it saves to history buffer
+          self.mlReset();
+          this.line = fullText;
+          this.cursor = fullText.length;
+          this.prevRows = 0;
+          this._prompt = self.getLinePrompt(0);
+        }
+
+        const histBefore = (this as any).historyIndex;
+        suppressRendering = true;
+        origTtyWrite(s, key);
+        suppressRendering = false;
+
+        // If history didn't change and was multi-line, restore original state
+        if ((this as any).historyIndex === histBefore && wasML) {
+          const text = this.line || '';
+          self.mlLines = text.split('\n');
+          self.mlActive = true;
+          self.mlLineIdx = savedLineIdx;
+          self.mlColIdx = savedColIdx;
+          self.mlSyncToReadline();
+          this._prompt = self.getLinePrompt(self.mlLineIdx);
+          self.mlCursorRow = 0;
+          self.refreshMultiline();
           return;
         }
-        // Single-line: let readline handle history
-        origTtyWrite(s, key);
-        // Check if history item is multi-line
-        if ((this.line || '').includes('\n')) {
-          self.mlEnterFromReadline();
+
+        const newText = this.line || '';
+        if (newText.includes('\n')) {
+          // New history item is multi-line — clear old single-line render if needed
+          if (!wasML) {
+            const oldRows = this.prevRows || 0;
+            if (oldRows > 0) process.stdout.write(`\x1B[${oldRows}A`);
+            process.stdout.write('\r\x1B[J');
+          }
+          self.mlLines = newText.split('\n');
+          self.mlActive = true;
+          // UP → cursor at last line
+          self.mlLineIdx = self.mlLines.length - 1;
+          self.mlColIdx = self.mlLine(self.mlLineIdx).length;
+          self.mlSyncToReadline();
+          this._prompt = self.getLinePrompt(self.mlLineIdx);
+          self.mlCursorRow = 0;
           self.refreshMultiline();
+        } else {
+          // Single-line result
+          if (wasML) this.prevRows = 0;
+          origRefreshLine();
         }
         return;
       }
@@ -565,7 +616,7 @@ export class Repl {
       // ── Down arrow ──
       if (key.name === 'down' && !key.ctrl && !key.meta) {
         if (self.mlActive && self.mlLineIdx < self.mlLines.length - 1) {
-          // Move to next line
+          // Move to next line within multi-line
           self.mlSyncFromReadline();
           self.mlLineIdx++;
           self.mlColIdx = Math.min(self.mlColIdx, self.mlLine(self.mlLineIdx).length);
@@ -574,15 +625,61 @@ export class Repl {
           self.refreshMultiline();
           return;
         }
-        if (self.mlActive) {
-          // At last line — block
+
+        // At last line of multi-line OR single-line → navigate history
+        const wasML = self.mlActive;
+        const savedLineIdx = self.mlLineIdx;
+        const savedColIdx = self.mlColIdx;
+
+        if (wasML) {
+          self.mlSyncFromReadline();
+          const fullText = self.mlLines.join('\n');
+          if (self.mlCursorRow > 0) process.stdout.write(`\x1B[${self.mlCursorRow}A`);
+          process.stdout.write('\r\x1B[J');
+          self.mlReset();
+          this.line = fullText;
+          this.cursor = fullText.length;
+          this.prevRows = 0;
+          this._prompt = self.getLinePrompt(0);
+        }
+
+        const histBefore = (this as any).historyIndex;
+        suppressRendering = true;
+        origTtyWrite(s, key);
+        suppressRendering = false;
+
+        if ((this as any).historyIndex === histBefore && wasML) {
+          const text = this.line || '';
+          self.mlLines = text.split('\n');
+          self.mlActive = true;
+          self.mlLineIdx = savedLineIdx;
+          self.mlColIdx = savedColIdx;
+          self.mlSyncToReadline();
+          this._prompt = self.getLinePrompt(self.mlLineIdx);
+          self.mlCursorRow = 0;
+          self.refreshMultiline();
           return;
         }
-        // Single-line: let readline handle history
-        origTtyWrite(s, key);
-        if ((this.line || '').includes('\n')) {
-          self.mlEnterFromReadline();
+
+        const newText = this.line || '';
+        if (newText.includes('\n')) {
+          if (!wasML) {
+            const oldRows = this.prevRows || 0;
+            if (oldRows > 0) process.stdout.write(`\x1B[${oldRows}A`);
+            process.stdout.write('\r\x1B[J');
+          }
+          self.mlLines = newText.split('\n');
+          self.mlActive = true;
+          // DOWN → cursor at first line
+          self.mlLineIdx = 0;
+          self.mlColIdx = 0;
+          self.mlSyncToReadline();
+          this._prompt = self.getLinePrompt(0);
+          self.mlCursorRow = 0;
           self.refreshMultiline();
+        } else {
+          if (wasML) this.prevRows = 0;
+          origRefreshLine();
         }
         return;
       }
