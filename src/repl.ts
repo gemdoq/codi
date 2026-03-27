@@ -569,15 +569,16 @@ export class Repl {
           this._prompt = self.getLinePrompt(0);
         }
 
-        const histBefore = (this as any).historyIndex;
+        const textBefore = this.line || '';
         suppressRendering = true;
         origTtyWrite(s, key);
         suppressRendering = false;
 
-        // If history didn't change and was multi-line, restore original state
-        if ((this as any).historyIndex === histBefore && wasML) {
-          const text = this.line || '';
-          self.mlLines = text.split('\n');
+        const newText = this.line || '';
+
+        // If text didn't change (no more history) and was multi-line, restore original state
+        if (newText === textBefore && wasML) {
+          self.mlLines = newText.split('\n');
           self.mlActive = true;
           self.mlLineIdx = savedLineIdx;
           self.mlColIdx = savedColIdx;
@@ -588,7 +589,6 @@ export class Repl {
           return;
         }
 
-        const newText = this.line || '';
         if (newText.includes('\n')) {
           // New history item is multi-line — clear old single-line render if needed
           if (!wasML) {
@@ -643,14 +643,15 @@ export class Repl {
           this._prompt = self.getLinePrompt(0);
         }
 
-        const histBefore = (this as any).historyIndex;
+        const textBefore = this.line || '';
         suppressRendering = true;
         origTtyWrite(s, key);
         suppressRendering = false;
 
-        if ((this as any).historyIndex === histBefore && wasML) {
-          const text = this.line || '';
-          self.mlLines = text.split('\n');
+        const newText = this.line || '';
+
+        if (newText === textBefore && wasML) {
+          self.mlLines = newText.split('\n');
           self.mlActive = true;
           self.mlLineIdx = savedLineIdx;
           self.mlColIdx = savedColIdx;
@@ -661,7 +662,6 @@ export class Repl {
           return;
         }
 
-        const newText = this.line || '';
         if (newText.includes('\n')) {
           if (!wasML) {
             const oldRows = this.prevRows || 0;
