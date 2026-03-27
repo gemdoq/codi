@@ -426,6 +426,10 @@ export class Repl {
       origRefreshLine();
     };
 
+    // ── Find kSubstringSearch symbol to reset before history navigation ──
+    const kSubstringSearch = Object.getOwnPropertySymbols(rlAny)
+      .find((s: symbol) => s.description === 'kSubstringSearch');
+
     // ── Override _ttyWrite for multi-line editing ──
     const origTtyWrite = rlAny._ttyWrite.bind(rlAny);
 
@@ -569,6 +573,10 @@ export class Repl {
           this._prompt = self.getLinePrompt(0);
         }
 
+        // Reset substring search so LEFT/RIGHT don't break history navigation
+        this.cursor = (this.line || '').length;
+        if (kSubstringSearch) this[kSubstringSearch] = '';
+
         const textBefore = this.line || '';
         suppressRendering = true;
         origTtyWrite(s, key);
@@ -642,6 +650,10 @@ export class Repl {
           this.prevRows = 0;
           this._prompt = self.getLinePrompt(0);
         }
+
+        // Reset substring search so LEFT/RIGHT don't break history navigation
+        this.cursor = (this.line || '').length;
+        if (kSubstringSearch) this[kSubstringSearch] = '';
 
         const textBefore = this.line || '';
         suppressRendering = true;
