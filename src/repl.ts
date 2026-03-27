@@ -173,8 +173,11 @@ class HistoryManager {
 
   private load(): void {
     try {
-      const content = fs.readFileSync(HISTORY_FILE, 'utf-8');
-      this.entries = content.split('\n').filter(Boolean)
+      const raw = fs.readFileSync(HISTORY_FILE, 'utf-8');
+      const content = raw.replace(/^\uFEFF/, ''); // Strip BOM (PowerShell UTF-8)
+      this.entries = content.split('\n')
+        .map(line => line.replace(/\r$/, '')) // Strip Windows CRLF
+        .filter(Boolean)
         .map(line => line.replace(/\\n/g, '\n'))
         .slice(-MAX_HISTORY);
     } catch { this.entries = []; }
