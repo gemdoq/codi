@@ -445,6 +445,20 @@ export class Repl {
         process.stderr.write(`[KEY] name=${key.name} ctrl=${key.ctrl} shift=${key.shift} meta=${key.meta} seq=${key.sequence ? [...key.sequence].map(c => '0x' + c.charCodeAt(0).toString(16)).join(' ') : 'null'} ml=${self.mlActive} li=${self.mlLineIdx}/${self.mlLines.length} histIdx=${this.historyIndex} cursor=${this.cursor} prevRows=${this.prevRows} line=${JSON.stringify((this.line||'').slice(0,50))}\n`);
       }
 
+      // ── Ctrl+D → always exit (even with text in prompt) ──
+      if (key.name === 'd' && key.ctrl) {
+        if (self.mlActive) {
+          // Clear multi-line display before exit
+          if (self.mlCursorRow > 0) {
+            process.stdout.write(`\x1B[${self.mlCursorRow}A`);
+          }
+          process.stdout.write('\r\x1B[J');
+          self.mlReset();
+        }
+        this.close();
+        return;
+      }
+
       // ── Newline detection ──
       const seq = key.sequence || '';
       const isKittyModifiedEnter = seq.startsWith('\x1b[13;') && seq.endsWith('u');
