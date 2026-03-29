@@ -571,6 +571,35 @@ export class Repl {
           return;
         }
 
+        // ── Visual wrap navigation (single-line wrapping across multiple visual rows) ──
+        if (!self.mlActive && (this.prevRows || 0) > 0) {
+          const cols = process.stdout.columns || 80;
+          const prompt = this._prompt || '';
+          const line = this.line || '';
+          const curDP = calcDisplayPos(prompt + line.slice(0, this.cursor), cols);
+          if (curDP.rows > 0) {
+            // Not on first visual row → move cursor up one visual row
+            const targetRow = curDP.rows - 1;
+            const targetCol = curDP.cols;
+            let newCursor = 0;
+            for (let pos = 0; pos <= this.cursor; pos++) {
+              const dp = calcDisplayPos(prompt + line.slice(0, pos), cols);
+              if (dp.rows === targetRow) {
+                newCursor = pos;
+                if (dp.cols >= targetCol) break;
+              } else if (dp.rows > targetRow) {
+                break;
+              }
+            }
+            this.cursor = newCursor;
+            if (process.env['CODI_DEBUG_KEYS']) {
+              process.stderr.write(`[UP-VWRAP] row=${curDP.rows}→${targetRow} col=${targetCol} cursor=${newCursor}\n`);
+            }
+            origRefreshLine();
+            return;
+          }
+        }
+
         // At first line of multi-line OR single-line → navigate history
         const wasML = self.mlActive;
         const savedLineIdx = self.mlLineIdx;
@@ -653,6 +682,36 @@ export class Repl {
           this._prompt = self.getLinePrompt(self.mlLineIdx);
           self.refreshMultiline();
           return;
+        }
+
+        // ── Visual wrap navigation (single-line wrapping across multiple visual rows) ──
+        if (!self.mlActive && (this.prevRows || 0) > 0) {
+          const cols = process.stdout.columns || 80;
+          const prompt = this._prompt || '';
+          const line = this.line || '';
+          const curDP = calcDisplayPos(prompt + line.slice(0, this.cursor), cols);
+          const totalDP = calcDisplayPos(prompt + line, cols);
+          if (curDP.rows < totalDP.rows) {
+            // Not on last visual row → move cursor down one visual row
+            const targetRow = curDP.rows + 1;
+            const targetCol = curDP.cols;
+            let newCursor = line.length; // default to end
+            for (let pos = this.cursor; pos <= line.length; pos++) {
+              const dp = calcDisplayPos(prompt + line.slice(0, pos), cols);
+              if (dp.rows === targetRow) {
+                newCursor = pos;
+                if (dp.cols >= targetCol) break;
+              } else if (dp.rows > targetRow) {
+                break;
+              }
+            }
+            this.cursor = newCursor;
+            if (process.env['CODI_DEBUG_KEYS']) {
+              process.stderr.write(`[DOWN-VWRAP] row=${curDP.rows}→${targetRow} col=${targetCol} cursor=${newCursor}\n`);
+            }
+            origRefreshLine();
+            return;
+          }
         }
 
         // At last line of multi-line OR single-line → navigate history
