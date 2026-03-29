@@ -627,31 +627,35 @@ export class Repl {
         }
 
         // ── Visual wrap navigation (single-line wrapping across multiple visual rows) ──
-        if (!self.mlActive && (this.prevRows || 0) > 0) {
+        // Note: DO NOT rely on this.prevRows — it tracks cursor row, not total line rows
+        if (!self.mlActive) {
           const cols = process.stdout.columns || 80;
           const prompt = this._prompt || '';
           const line = this.line || '';
-          const curDP = calcDisplayPos(prompt + line.slice(0, this.cursor), cols);
-          if (curDP.rows > 0) {
-            // Not on first visual row → move cursor up one visual row
-            const targetRow = curDP.rows - 1;
-            const targetCol = curDP.cols;
-            let newCursor = 0;
-            for (let pos = 0; pos <= this.cursor; pos++) {
-              const dp = calcDisplayPos(prompt + line.slice(0, pos), cols);
-              if (dp.rows === targetRow) {
-                newCursor = pos;
-                if (dp.cols >= targetCol) break;
-              } else if (dp.rows > targetRow) {
-                break;
+          const totalDP = calcDisplayPos(prompt + line, cols);
+          if (totalDP.rows > 0) {
+            const curDP = calcDisplayPos(prompt + line.slice(0, this.cursor), cols);
+            if (curDP.rows > 0) {
+              // Not on first visual row → move cursor up one visual row
+              const targetRow = curDP.rows - 1;
+              const targetCol = curDP.cols;
+              let newCursor = 0;
+              for (let pos = 0; pos <= this.cursor; pos++) {
+                const dp = calcDisplayPos(prompt + line.slice(0, pos), cols);
+                if (dp.rows === targetRow) {
+                  newCursor = pos;
+                  if (dp.cols >= targetCol) break;
+                } else if (dp.rows > targetRow) {
+                  break;
+                }
               }
+              this.cursor = newCursor;
+              if (process.env['CODI_DEBUG_KEYS']) {
+                process.stderr.write(`[UP-VWRAP] row=${curDP.rows}→${targetRow} col=${targetCol} cursor=${newCursor}\n`);
+              }
+              origRefreshLine();
+              return;
             }
-            this.cursor = newCursor;
-            if (process.env['CODI_DEBUG_KEYS']) {
-              process.stderr.write(`[UP-VWRAP] row=${curDP.rows}→${targetRow} col=${targetCol} cursor=${newCursor}\n`);
-            }
-            origRefreshLine();
-            return;
           }
         }
 
@@ -795,12 +799,13 @@ export class Repl {
         }
 
         // ── Visual wrap navigation (single-line wrapping across multiple visual rows) ──
-        if (!self.mlActive && (this.prevRows || 0) > 0) {
+        // Note: DO NOT rely on this.prevRows — it tracks cursor row, not total line rows
+        if (!self.mlActive) {
           const cols = process.stdout.columns || 80;
           const prompt = this._prompt || '';
           const line = this.line || '';
-          const curDP = calcDisplayPos(prompt + line.slice(0, this.cursor), cols);
           const totalDP = calcDisplayPos(prompt + line, cols);
+          const curDP = calcDisplayPos(prompt + line.slice(0, this.cursor), cols);
           if (curDP.rows < totalDP.rows) {
             // Not on last visual row → move cursor down one visual row
             const targetRow = curDP.rows + 1;
