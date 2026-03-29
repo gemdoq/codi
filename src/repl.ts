@@ -560,15 +560,70 @@ export class Repl {
 
       // ── Up arrow ──
       if (key.name === 'up' && !key.ctrl && !key.meta) {
-        if (self.mlActive && self.mlLineIdx > 0) {
-          // Move to previous line within multi-line
+        if (process.env['CODI_DEBUG_KEYS']) {
+          process.stderr.write(`[UP] mlActive=${self.mlActive} mlLineIdx=${self.mlLineIdx} mlLines.len=${self.mlLines.length} prevRows=${this.prevRows} cursor=${this.cursor} line=${JSON.stringify((this.line||'').slice(0,50))}\n`);
+        }
+        if (self.mlActive) {
           self.mlSyncFromReadline();
-          self.mlLineIdx--;
-          self.mlColIdx = Math.min(self.mlColIdx, self.mlLine(self.mlLineIdx).length);
-          self.mlSyncToReadline();
-          this._prompt = self.getLinePrompt(self.mlLineIdx);
-          self.refreshMultiline();
-          return;
+          const cols = process.stdout.columns || 80;
+          const prompt = self.getLinePrompt(self.mlLineIdx);
+          const curLine = self.mlLine(self.mlLineIdx);
+          const curDP = calcDisplayPos(prompt + curLine.slice(0, self.mlColIdx), cols);
+
+          if (curDP.rows > 0) {
+            // Current logical line wraps visually and cursor is NOT on first visual row
+            // → move cursor up one visual row within the same logical line
+            const targetRow = curDP.rows - 1;
+            const targetCol = curDP.cols;
+            let newCol = 0;
+            for (let pos = 0; pos <= self.mlColIdx; pos++) {
+              const dp = calcDisplayPos(prompt + curLine.slice(0, pos), cols);
+              if (dp.rows === targetRow) {
+                newCol = pos;
+                if (dp.cols >= targetCol) break;
+              } else if (dp.rows > targetRow) break;
+            }
+            self.mlColIdx = newCol;
+            self.mlSyncToReadline();
+            self.refreshMultiline();
+            if (process.env['CODI_DEBUG_KEYS']) {
+              process.stderr.write(`[UP-ML-VWRAP] line=${self.mlLineIdx} row=${curDP.rows}→${targetRow} col=${newCol}\n`);
+            }
+            return;
+          }
+
+          if (self.mlLineIdx > 0) {
+            // At first visual row of current line → move to previous logical line
+            const prevLineIdx = self.mlLineIdx - 1;
+            const prevPrompt = self.getLinePrompt(prevLineIdx);
+            const prevLine = self.mlLine(prevLineIdx);
+            const prevDP = calcDisplayPos(prevPrompt + prevLine, cols);
+            if (prevDP.rows > 0) {
+              // Previous line also wraps → land on its last visual row at same column
+              const targetRow = prevDP.rows;
+              const targetCol = curDP.cols;
+              let newCol = prevLine.length;
+              for (let pos = 0; pos <= prevLine.length; pos++) {
+                const dp = calcDisplayPos(prevPrompt + prevLine.slice(0, pos), cols);
+                if (dp.rows === targetRow) {
+                  newCol = pos;
+                  if (dp.cols >= targetCol) break;
+                } else if (dp.rows > targetRow) break;
+              }
+              self.mlLineIdx = prevLineIdx;
+              self.mlColIdx = newCol;
+            } else {
+              // Previous line fits in one visual row
+              self.mlLineIdx = prevLineIdx;
+              self.mlColIdx = Math.min(self.mlColIdx, prevLine.length);
+            }
+            self.mlSyncToReadline();
+            this._prompt = self.getLinePrompt(self.mlLineIdx);
+            self.refreshMultiline();
+            return;
+          }
+
+          // At first visual row of first logical line → fall through to history
         }
 
         // ── Visual wrap navigation (single-line wrapping across multiple visual rows) ──
@@ -673,15 +728,70 @@ export class Repl {
 
       // ── Down arrow ──
       if (key.name === 'down' && !key.ctrl && !key.meta) {
-        if (self.mlActive && self.mlLineIdx < self.mlLines.length - 1) {
-          // Move to next line within multi-line
+        if (process.env['CODI_DEBUG_KEYS']) {
+          process.stderr.write(`[DOWN] mlActive=${self.mlActive} mlLineIdx=${self.mlLineIdx} mlLines.len=${self.mlLines.length} prevRows=${this.prevRows} cursor=${this.cursor} line=${JSON.stringify((this.line||'').slice(0,50))}\n`);
+        }
+        if (self.mlActive) {
           self.mlSyncFromReadline();
-          self.mlLineIdx++;
-          self.mlColIdx = Math.min(self.mlColIdx, self.mlLine(self.mlLineIdx).length);
-          self.mlSyncToReadline();
-          this._prompt = self.getLinePrompt(self.mlLineIdx);
-          self.refreshMultiline();
-          return;
+          const cols = process.stdout.columns || 80;
+          const prompt = self.getLinePrompt(self.mlLineIdx);
+          const curLine = self.mlLine(self.mlLineIdx);
+          const curDP = calcDisplayPos(prompt + curLine.slice(0, self.mlColIdx), cols);
+          const totalDP = calcDisplayPos(prompt + curLine, cols);
+
+          if (curDP.rows < totalDP.rows) {
+            // Current logical line wraps visually and cursor is NOT on last visual row
+            // → move cursor down one visual row within the same logical line
+            const targetRow = curDP.rows + 1;
+            const targetCol = curDP.cols;
+            let newCol = curLine.length;
+            for (let pos = self.mlColIdx; pos <= curLine.length; pos++) {
+              const dp = calcDisplayPos(prompt + curLine.slice(0, pos), cols);
+              if (dp.rows === targetRow) {
+                newCol = pos;
+                if (dp.cols >= targetCol) break;
+              } else if (dp.rows > targetRow) break;
+            }
+            self.mlColIdx = newCol;
+            self.mlSyncToReadline();
+            self.refreshMultiline();
+            if (process.env['CODI_DEBUG_KEYS']) {
+              process.stderr.write(`[DOWN-ML-VWRAP] line=${self.mlLineIdx} row=${curDP.rows}→${targetRow} col=${newCol}\n`);
+            }
+            return;
+          }
+
+          if (self.mlLineIdx < self.mlLines.length - 1) {
+            // At last visual row of current line → move to next logical line
+            const nextLineIdx = self.mlLineIdx + 1;
+            const nextPrompt = self.getLinePrompt(nextLineIdx);
+            const nextLine = self.mlLine(nextLineIdx);
+            const nextDP = calcDisplayPos(nextPrompt + nextLine, cols);
+            if (nextDP.rows > 0) {
+              // Next line also wraps → land on its first visual row at same column
+              const targetCol = curDP.cols;
+              let newCol = 0;
+              for (let pos = 0; pos <= nextLine.length; pos++) {
+                const dp = calcDisplayPos(nextPrompt + nextLine.slice(0, pos), cols);
+                if (dp.rows === 0) {
+                  newCol = pos;
+                  if (dp.cols >= targetCol) break;
+                } else break;
+              }
+              self.mlLineIdx = nextLineIdx;
+              self.mlColIdx = newCol;
+            } else {
+              // Next line fits in one visual row
+              self.mlLineIdx = nextLineIdx;
+              self.mlColIdx = Math.min(self.mlColIdx, nextLine.length);
+            }
+            self.mlSyncToReadline();
+            this._prompt = self.getLinePrompt(self.mlLineIdx);
+            self.refreshMultiline();
+            return;
+          }
+
+          // At last visual row of last logical line → fall through to history
         }
 
         // ── Visual wrap navigation (single-line wrapping across multiple visual rows) ──
