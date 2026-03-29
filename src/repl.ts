@@ -445,7 +445,7 @@ export class Repl {
         process.stderr.write(`[KEY] name=${key.name} ctrl=${key.ctrl} shift=${key.shift} meta=${key.meta} seq=${key.sequence ? [...key.sequence].map(c => '0x' + c.charCodeAt(0).toString(16)).join(' ') : 'null'} ml=${self.mlActive} li=${self.mlLineIdx}/${self.mlLines.length} histIdx=${this.historyIndex} cursor=${this.cursor} prevRows=${this.prevRows} line=${JSON.stringify((this.line||'').slice(0,50))}\n`);
       }
 
-      // ── Ctrl+D → always exit (even with text in prompt) ──
+      // ── Ctrl+D → always exit (even with text in prompt or permission prompt) ──
       if (key.name === 'd' && key.ctrl) {
         if (self.mlActive) {
           // Clear multi-line display before exit
@@ -455,7 +455,7 @@ export class Repl {
           process.stdout.write('\r\x1B[J');
           self.mlReset();
         }
-        this.close();
+        self.gracefulExit().catch(() => process.exit(1));
         return;
       }
 
@@ -1042,10 +1042,17 @@ export class Repl {
     registerPromptHandler((prompt: string) => {
       if (!this.rl) return Promise.reject(new Error('REPL not running'));
       process.stdout.write(prompt);
-      return new Promise<string>((resolve) => {
-        this.rl!.once('line', (answer: string) => {
+      return new Promise<string>((resolve, reject) => {
+        const onLine = (answer: string) => {
+          this.rl?.removeListener('close', onClose);
           resolve(answer);
-        });
+        };
+        const onClose = () => {
+          this.rl?.removeListener('line', onLine);
+          reject(new Error('closed'));
+        };
+        this.rl!.once('line', onLine);
+        this.rl!.once('close', onClose);
       });
     });
 
