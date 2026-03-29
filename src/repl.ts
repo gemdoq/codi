@@ -442,7 +442,7 @@ export class Repl {
       // Debug: log key events when CODI_DEBUG_KEYS is set
       if (process.env['CODI_DEBUG_KEYS']) {
         const seq = s ? [...s].map(c => '0x' + c.charCodeAt(0).toString(16)).join(' ') : 'null';
-        process.stderr.write(`[KEY] name=${key.name} ctrl=${key.ctrl} shift=${key.shift} seq=${key.sequence ? [...key.sequence].map(c => '0x' + c.charCodeAt(0).toString(16)).join(' ') : 'null'} ml=${self.mlActive} li=${self.mlLineIdx}/${self.mlLines.length} histIdx=${this.historyIndex} line=${JSON.stringify((this.line||'').slice(0,30))}\n`);
+        process.stderr.write(`[KEY] name=${key.name} ctrl=${key.ctrl} shift=${key.shift} meta=${key.meta} seq=${key.sequence ? [...key.sequence].map(c => '0x' + c.charCodeAt(0).toString(16)).join(' ') : 'null'} ml=${self.mlActive} li=${self.mlLineIdx}/${self.mlLines.length} histIdx=${this.historyIndex} cursor=${this.cursor} prevRows=${this.prevRows} line=${JSON.stringify((this.line||'').slice(0,50))}\n`);
       }
 
       // ── Newline detection ──
@@ -774,7 +774,13 @@ export class Repl {
       }
 
       // ── Single-line mode — pass through ──
+      const lineBeforePassthrough = this.line;
+      const cursorBeforePassthrough = this.cursor;
+      const prevRowsBefore = this.prevRows;
       origTtyWrite(s, key);
+      if (process.env['CODI_DEBUG_KEYS']) {
+        process.stderr.write(`[AFTER] name=${key.name} line=${JSON.stringify((this.line||'').slice(0,50))} cursor=${this.cursor} prevRows=${this.prevRows} lineBefore=${JSON.stringify((lineBeforePassthrough||'').slice(0,50))} cursorBefore=${cursorBeforePassthrough} prevRowsBefore=${prevRowsBefore}\n`);
+      }
     };
 
     // ── Handle paste ──
