@@ -81,28 +81,46 @@ export class OpenAIProvider implements LlmProvider {
     options: LlmRequestOptions
   ): Promise<LlmResponse> {
     let stream;
+    const baseParams = {
+      model: this.model,
+      messages,
+      max_tokens: options.maxTokens || this.maxTokens,
+      ...(options.temperature !== undefined ? { temperature: options.temperature } : {}),
+      ...(tools && tools.length > 0 ? { tools } : {}),
+      stream: true as const,
+    };
     try {
       stream = await this.client.chat.completions.create({
-        model: this.model,
-        messages,
-        max_tokens: options.maxTokens || this.maxTokens,
-        ...(options.temperature !== undefined ? { temperature: options.temperature } : {}),
-        ...(tools && tools.length > 0 ? { tools } : {}),
-        stream: true,
+        ...baseParams,
+        stream_options: { include_usage: true },
       });
-    } catch (err: any) {
-      const status = err.status || err.statusCode || '';
-      const body = err.error || err.body || err.response?.body || '';
-      const detail = body ? JSON.stringify(body) : err.message || String(err);
-      throw new Error(`${status} ${detail}`.trim());
+    } catch (firstErr: any) {
+      // Fallback: some providers (e.g. older Gemini) may not support stream_options
+      try {
+        stream = await this.client.chat.completions.create(baseParams);
+      } catch (err: any) {
+        const status = err.status || err.statusCode || '';
+        const body = err.error || err.body || err.response?.body || '';
+        const detail = body ? JSON.stringify(body) : err.message || String(err);
+        throw new Error(`${status} ${detail}`.trim());
+      }
     }
 
     const content: ContentBlock[] = [];
     const toolCalls: ToolCall[] = [];
     let text = '';
+    let usage: { input_tokens: number; output_tokens: number } | undefined;
     const toolCallAccumulator: Map<number, { id: string; name: string; args: string }> = new Map();
 
     for await (const chunk of stream) {
+      // Capture usage from the final chunk (stream_options.include_usage)
+      if (chunk.usage) {
+        usage = {
+          input_tokens: chunk.usage.prompt_tokens,
+          output_tokens: chunk.usage.completion_tokens,
+        };
+      }
+
       const delta = chunk.choices[0]?.delta;
       if (!delta) continue;
 
@@ -143,6 +161,7 @@ export class OpenAIProvider implements LlmProvider {
       content,
       text: text || undefined,
       toolCalls: toolCalls.length > 0 ? toolCalls : undefined,
+      usage,
       stopReason: toolCalls.length > 0 ? 'tool_use' : 'end_turn',
     };
   }
